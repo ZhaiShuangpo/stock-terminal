@@ -1,0 +1,20 @@
+# 忽略 macOS 系统文件
+.DS_Store
+
+# 忽略日志文件
+*.log
+
+# 忽略临时数据文件
+body_dump.html
+
+# 忽略后端 (Python) 相关
+backend/venv/
+backend/__pycache__/
+*.pyc
+.pytest_cache/
+.env
+
+# 忽略前端 (Node.js) 相关
+frontend/node_modules/
+frontend/dist/
+frontend/.eslintcache
