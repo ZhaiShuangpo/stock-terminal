@@ -219,6 +219,51 @@ async def fundflow_stock(symbol: str):
             return {"data": None}
     return {"data": None}
 
+async def get_kline_data(symbol: str, period: str = "day", limit: int = 100):
+    # period: day, week, month
+    if symbol.startswith("sh") or symbol.startswith("sz"):
+        req_symbol = symbol
+    else:
+        req_symbol = f"sh{symbol}" if symbol.startswith("6") else f"sz{symbol}"
+    
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={req_symbol},{period},,,{limit},qfq"
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, timeout=5.0)
+            data = response.json()
+            if data and "data" in data and req_symbol in data["data"]:
+                stock_data = data["data"][req_symbol]
+                kline_key = f"qfq{period}" if f"qfq{period}" in stock_data else period
+                if kline_key in stock_data:
+                    return stock_data[kline_key]
+        except Exception as e:
+            print(f"K-line error: {e}")
+            return None
+    return None
+
+@app.get("/api/history")
+async def history_stock(symbol: str, period: str = "day"):
+    if not symbol:
+        return {"data": []}
+    
+    kline_raw = await get_kline_data(symbol, period, 200)
+    if not kline_raw:
+        return {"data": []}
+        
+    formatted_data = []
+    for item in kline_raw:
+        if len(item) >= 6:
+            # item = [date, open, close, high, low, volume]
+            formatted_data.append({
+                "time": item[0],
+                "open": float(item[1]),
+                "close": float(item[2]),
+                "high": float(item[3]),
+                "low": float(item[4]),
+                "volume": float(item[5])
+            })
+    return {"data": formatted_data}
+
 @app.get("/api/analyze")
 async def analyze_stock(symbol: str, name: str = "", price: str = "", changePercent: str = "", x_gemini_key: str = Header(None)):
     if not x_gemini_key:
@@ -231,17 +276,24 @@ async def analyze_stock(symbol: str, name: str = "", price: str = "", changePerc
         if price and changePercent:
             current_status = f"该股当前最新价为 {price}，今日涨跌幅为 {changePercent}%。"
 
+        # Fetch recent historical data (last 20 days) for AI context
+        kline_context = ""
+        recent_klines = await get_kline_data(symbol, "day", 20)
+        if recent_klines and len(recent_klines) > 0:
+            kline_text = ", ".join([f"{k[0]}(收:{k[2]})" for k in recent_klines[-10:]])
+            kline_context = f"\n【近10日收盘价走势】：{kline_text}"
+
         prompt = f"""
-作为拥有15年A股游资与机构操盘经验的顶尖操盘手，请对股票 【{stock_identifier}】 进行极速复盘与明日推演。
-{current_status}
+作为拥有15年A股游资与机构操盘经验的顶尖操盘手，请对股票 【{stock_identifier}】 进行极速复盘与推演。
+{current_status}{kline_context}
 
-请务必利用你强大的联网搜索能力，检索该股票最新的新闻、公告、以及近期实际走势。
-基于真实的新闻、基本面及A股市场风格的深刻理解，提供以下高密度干货（总字数严格控制在150字以内）：
+请务必利用你强大的联网搜索能力，检索该股票最新的新闻、公告、以及近期实际走势。结合上述提供的近期K线走势数据。
+基于真实的新闻、基本面、长短期量价形态及A股市场风格的深刻理解，提供以下高密度干货（总字数严格控制在200字以内）：
 
-1. 【资金定性】：近期主力是属于洗盘、出货、试盘还是主升浪加速？
+1. 【资金定性】：结合近十日走势，主力是属于洗盘、出货、试盘还是主升浪加速？
 2. 【核心逻辑】：该股最近炒作的核心题材或基本面利好是什么？（一句话点透）
-3. 【关键点位】：给出一个短线强弱分水岭（具体价格或技术位）。
-4. 【操作剧本】：明日若高开/低开应采取的应对预案（持股观望/逢高减仓/留意低吸）。
+3. 【关键点位】：给出一个短线或中线的强弱分水岭（具体支撑/阻力价格）。
+4. 【操作剧本】：明日及本周若高开/低开应采取的应对预案。
 
 要求：语言极度精炼、犀利，多用A股实战术语（如：连板、反包、弱转强、水下捞等），绝对不要废话和免责声明，直接给出你的判断。
 """

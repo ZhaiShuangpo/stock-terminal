@@ -144,6 +144,7 @@ export default function App() {
 
   const [aiAnalyses, setAiAnalyses] = useState<Record<string, string>>({});
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [chartPeriod, setChartPeriod] = useState<'intraday' | 'day' | 'week' | 'month'>('intraday');
   const [intradayData, setIntradayData] = useState<any[]>([]);
   const [vwapData, setVwapData] = useState<any[]>([]);
   const [markers, setMarkers] = useState<any[]>([]);
@@ -311,68 +312,80 @@ export default function App() {
     let isMounted = true;
     const fetchData = async () => {
       try {
-        const [resIntraday, resFund] = await Promise.all([
-          fetch(`http://localhost:8000/api/intraday?symbol=${selectedStock.symbol}`),
-          fetch(`http://localhost:8000/api/fundflow?symbol=${selectedStock.symbol}`)
-        ]);
-        const dataIntraday = await resIntraday.json();
-        const dataFund = await resFund.json();
-        
-        if (dataIntraday.data && dataIntraday.date && isMounted) {
-          const year = dataIntraday.date.substring(0, 4);
-          const month = dataIntraday.date.substring(4, 6);
-          const day = dataIntraday.date.substring(6, 8);
+        if (chartPeriod === 'intraday') {
+          const [resIntraday, resFund] = await Promise.all([
+            fetch(`http://localhost:8000/api/intraday?symbol=${selectedStock.symbol}`),
+            fetch(`http://localhost:8000/api/fundflow?symbol=${selectedStock.symbol}`)
+          ]);
+          const dataIntraday = await resIntraday.json();
+          const dataFund = await resFund.json();
           
-          const chartData: any[] = [];
-          const vwapPoints: any[] = [];
-          const newMarkers: any[] = [];
-          let prevCumVol = 0;
-          const volWindow: number[] = [];
-
-          dataIntraday.data.forEach((item: string) => {
-            const parts = item.split(' ');
-            const price = parseFloat(parts[1]);
-            const cumVol = parseFloat(parts[2]);
-            const cumAmount = parseFloat(parts[3]);
+          if (dataIntraday.data && dataIntraday.date && isMounted) {
+            const year = dataIntraday.date.substring(0, 4);
+            const month = dataIntraday.date.substring(4, 6);
+            const day = dataIntraday.date.substring(6, 8);
             
-            const hour = parseInt(parts[0].substring(0, 2), 10);
-            const minute = parseInt(parts[0].substring(2, 4), 10);
-            const time = Math.floor(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day), hour, minute) / 1000);
-            
-            chartData.push({ time, value: price });
-            
-            if (cumVol > 0) {
-              const vwap = cumAmount / (cumVol * 100);
-              vwapPoints.push({ time, value: vwap });
-            }
+            const chartData: any[] = [];
+            const vwapPoints: any[] = [];
+            const newMarkers: any[] = [];
+            let prevCumVol = 0;
+            const volWindow: number[] = [];
 
-            const minVol = cumVol - prevCumVol;
-            prevCumVol = cumVol;
-
-            // Volume breakout logic: minVol > 3 * MA(10)
-            if (volWindow.length >= 10) {
-              const maVol = volWindow.reduce((a, b) => a + b, 0) / volWindow.length;
-              if (maVol > 0 && minVol > maVol * 3 && price > (chartData[chartData.length - 2]?.value || 0)) {
-                newMarkers.push({
-                  time,
-                  position: 'belowBar',
-                  color: '#ff3b30',
-                  shape: 'arrowUp',
-                  text: 'B',
-                  size: 1,
-                });
+            dataIntraday.data.forEach((item: string) => {
+              const parts = item.split(' ');
+              const price = parseFloat(parts[1]);
+              const cumVol = parseFloat(parts[2]);
+              const cumAmount = parseFloat(parts[3]);
+              
+              const hour = parseInt(parts[0].substring(0, 2), 10);
+              const minute = parseInt(parts[0].substring(2, 4), 10);
+              const time = Math.floor(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day), hour, minute) / 1000);
+              
+              chartData.push({ time, value: price });
+              
+              if (cumVol > 0) {
+                const vwap = cumAmount / (cumVol * 100);
+                vwapPoints.push({ time, value: vwap });
               }
-              volWindow.shift();
-            }
-            volWindow.push(minVol);
-          });
 
-          setIntradayData(chartData);
-          setVwapData(vwapPoints);
-          setMarkers(newMarkers);
-        }
-        if (dataFund.data && isMounted) {
-          setFundFlow(dataFund.data);
+              const minVol = cumVol - prevCumVol;
+              prevCumVol = cumVol;
+
+              // Volume breakout logic: minVol > 3 * MA(10)
+              if (volWindow.length >= 10) {
+                const maVol = volWindow.reduce((a, b) => a + b, 0) / volWindow.length;
+                if (maVol > 0 && minVol > maVol * 3 && price > (chartData[chartData.length - 2]?.value || 0)) {
+                  newMarkers.push({
+                    time,
+                    position: 'belowBar',
+                    color: '#ff3b30',
+                    shape: 'arrowUp',
+                    text: 'B',
+                    size: 1,
+                  });
+                }
+                volWindow.shift();
+              }
+              volWindow.push(minVol);
+            });
+
+            setIntradayData(chartData);
+            setVwapData(vwapPoints);
+            setMarkers(newMarkers);
+          }
+          if (dataFund.data && isMounted) {
+            setFundFlow(dataFund.data);
+          }
+        } else {
+          // Historical data (day, week, month)
+          const resHistory = await fetch(`http://localhost:8000/api/history?symbol=${selectedStock.symbol}&period=${chartPeriod}`);
+          const dataHistory = await resHistory.json();
+          if (dataHistory.data && isMounted) {
+            setIntradayData(dataHistory.data);
+            setVwapData([]);
+            setMarkers([]);
+            // Don't fetch fund flow for historical data, or keep the old one
+          }
         }
       } catch (e) {
         console.error("Failed to fetch stock data", e);
@@ -384,7 +397,7 @@ export default function App() {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [selectedStock?.symbol]);
+  }, [selectedStock?.symbol, chartPeriod]);
 
   const displayedStocks = useMemo(() => {
     const activeGroup = groups.find(g => g.id === activeGroupId);
@@ -669,15 +682,42 @@ export default function App() {
                 <button onClick={() => setSelectedStock(null)} className="p-1 rounded hover:bg-gray-800 text-gray-400 transition-colors"><X className="w-5 h-5" /></button>
               </div>
             </div>
-            <div className="h-64 border-b border-gray-800 p-0 relative">
-              <Chart data={intradayData} vwapData={vwapData} markers={markers} prevClose={selectedStock.price - selectedStock.change} colors={{
-                  backgroundColor: 'transparent',
-                  lineColor: isBossMode ? '#8e8e93' : (selectedStock.changePercent >= 0 ? '#ff3b30' : '#34c759'),
-                  textColor: '#D9D9D9',
-                  areaTopColor: isBossMode ? 'rgba(142, 142, 147, 0.4)' : (selectedStock.changePercent >= 0 ? 'rgba(255, 59, 48, 0.4)' : 'rgba(52, 199, 89, 0.4)'),
-                  areaBottomColor: 'rgba(0, 0, 0, 0)',
-                }}
-              />
+            <div className="flex flex-col border-b border-gray-800">
+              <div className="flex items-center px-4 py-2 space-x-2 border-b border-gray-800/50 bg-gray-900/30">
+                {[
+                  { id: 'intraday', label: '分时' },
+                  { id: 'day', label: '日线' },
+                  { id: 'week', label: '周线' },
+                  { id: 'month', label: '月线' },
+                ].map(period => (
+                  <button
+                    key={period.id}
+                    onClick={() => {
+                      if (chartPeriod !== period.id) {
+                        setChartPeriod(period.id as any);
+                        setIntradayData([]);
+                        setVwapData([]);
+                        setMarkers([]);
+                      }
+                    }}
+                    className={`px-2 py-0.5 text-xs rounded transition-colors ${chartPeriod === period.id ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}
+                  >
+                    {period.label}
+                  </button>
+                ))}
+              </div>
+              <div className="h-64 p-0 relative">
+                <Chart data={intradayData} vwapData={chartPeriod === 'intraday' ? vwapData : []} markers={chartPeriod === 'intraday' ? markers : []} prevClose={selectedStock.price - selectedStock.change} type={chartPeriod === 'intraday' ? 'area' : 'candlestick'} colors={{
+                    backgroundColor: 'transparent',
+                    lineColor: isBossMode ? '#8e8e93' : (selectedStock.changePercent >= 0 ? '#ff3b30' : '#34c759'),
+                    textColor: '#D9D9D9',
+                    areaTopColor: isBossMode ? 'rgba(142, 142, 147, 0.4)' : (selectedStock.changePercent >= 0 ? 'rgba(255, 59, 48, 0.4)' : 'rgba(52, 199, 89, 0.4)'),
+                    areaBottomColor: 'rgba(0, 0, 0, 0)',
+                    upColor: '#ff3b30',
+                    downColor: '#34c759',
+                  }}
+                />
+              </div>
             </div>
             <div className="flex-1 p-4 overflow-auto">
               {!isBossMode && (

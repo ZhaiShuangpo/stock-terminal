@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { createChart, ColorType, AreaSeries, LineSeries, createSeriesMarkers } from 'lightweight-charts';
+import { createChart, ColorType, AreaSeries, LineSeries, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts';
 import type { ISeriesApi } from 'lightweight-charts';
 
 interface ChartProps {
@@ -7,12 +7,15 @@ interface ChartProps {
   vwapData?: any[];
   markers?: any[];
   prevClose?: number;
+  type?: 'area' | 'candlestick';
   colors?: {
     backgroundColor?: string;
     lineColor?: string;
     textColor?: string;
     areaTopColor?: string;
     areaBottomColor?: string;
+    upColor?: string;
+    downColor?: string;
   };
 }
 
@@ -21,17 +24,20 @@ export const Chart = ({
   vwapData,
   markers,
   prevClose,
+  type = 'area',
   colors: {
     backgroundColor = 'transparent',
     lineColor = '#2962FF',
     textColor = '#D9D9D9',
     areaTopColor = 'rgba(41, 98, 255, 0.4)',
     areaBottomColor = 'rgba(41, 98, 255, 0)',
+    upColor = '#ff3b30', // A-share red for up
+    downColor = '#34c759', // A-share green for down
   } = {},
 }: ChartProps) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
-  const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Area"> | ISeriesApi<"Candlestick"> | null>(null);
   const vwapSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const markersPrimitiveRef = useRef<any>(null);
 
@@ -48,18 +54,32 @@ export const Chart = ({
         horzLines: { color: 'rgba(43, 43, 67, 0.3)' },
       },
       timeScale: {
-        timeVisible: true,
+        timeVisible: type === 'area',
         secondsVisible: false,
         borderColor: 'rgba(43, 43, 67, 0.5)',
-        tickMarkFormatter: (time: number) => {
+        tickMarkFormatter: (time: any) => {
+          if (typeof time === 'string') return time;
+          if (typeof time === 'object' && time !== null && 'year' in time) {
+            return `${time.year}-${String(time.month).padStart(2, '0')}-${String(time.day).padStart(2, '0')}`;
+          }
           const d = new Date(time * 1000);
-          return `${d.getUTCHours().toString().padStart(2, '0')}:${d.getUTCMinutes().toString().padStart(2, '0')}`;
+          if (type === 'area') {
+            return `${d.getUTCHours().toString().padStart(2, '0')}:${d.getUTCMinutes().toString().padStart(2, '0')}`;
+          }
+          return `${d.getUTCFullYear()}-${(d.getUTCMonth()+1).toString().padStart(2, '0')}-${d.getUTCDate().toString().padStart(2, '0')}`;
         },
       },
       localization: {
-        timeFormatter: (time: number) => {
+        timeFormatter: (time: any) => {
+          if (typeof time === 'string') return time;
+          if (typeof time === 'object' && time !== null && 'year' in time) {
+            return `${time.year}-${String(time.month).padStart(2, '0')}-${String(time.day).padStart(2, '0')}`;
+          }
           const d = new Date(time * 1000);
-          return `${d.getUTCFullYear()}-${(d.getUTCMonth()+1).toString().padStart(2, '0')}-${d.getUTCDate().toString().padStart(2, '0')} ${d.getUTCHours().toString().padStart(2, '0')}:${d.getUTCMinutes().toString().padStart(2, '0')}`;
+          if (type === 'area') {
+            return `${d.getUTCFullYear()}-${(d.getUTCMonth()+1).toString().padStart(2, '0')}-${d.getUTCDate().toString().padStart(2, '0')} ${d.getUTCHours().toString().padStart(2, '0')}:${d.getUTCMinutes().toString().padStart(2, '0')}`;
+          }
+          return `${d.getUTCFullYear()}-${(d.getUTCMonth()+1).toString().padStart(2, '0')}-${d.getUTCDate().toString().padStart(2, '0')}`;
         }
       },
       rightPriceScale: {
@@ -70,30 +90,44 @@ export const Chart = ({
     });
     chartRef.current = chart;
 
-    const lineSeries = chart.addSeries(AreaSeries, {
-      lineColor,
-      topColor: areaTopColor,
-      bottomColor: areaBottomColor,
-      lineWidth: 2,
-    });
-    seriesRef.current = lineSeries;
+    let mainSeries;
+    if (type === 'area') {
+      mainSeries = chart.addSeries(AreaSeries, {
+        lineColor,
+        topColor: areaTopColor,
+        bottomColor: areaBottomColor,
+        lineWidth: 2,
+      });
+    } else {
+      mainSeries = chart.addSeries(CandlestickSeries, {
+        upColor,
+        downColor,
+        borderVisible: false,
+        wickUpColor: upColor,
+        wickDownColor: downColor,
+      });
+    }
+    seriesRef.current = mainSeries;
 
-    const vwapSeries = chart.addSeries(LineSeries, {
-      color: '#F59E0B', // Yellow color for VWAP
-      lineWidth: 2,
-      lineStyle: 0,
-      crosshairMarkerVisible: false,
-    });
-    vwapSeriesRef.current = vwapSeries;
+    let vwapSeries = null;
+    if (type === 'area') {
+      vwapSeries = chart.addSeries(LineSeries, {
+        color: '#F59E0B',
+        lineWidth: 2,
+        lineStyle: 0,
+        crosshairMarkerVisible: false,
+      });
+      vwapSeriesRef.current = vwapSeries;
+    }
 
     if (data && data.length > 0) {
-      lineSeries.setData(data);
-      if (markers && markers.length > 0) {
-        markersPrimitiveRef.current = createSeriesMarkers(lineSeries as any, markers);
+      mainSeries.setData(data);
+      if (markers && markers.length > 0 && type === 'area') {
+        markersPrimitiveRef.current = createSeriesMarkers(mainSeries as any, markers);
       }
       chart.timeScale().fitContent();
     }
-    if (vwapData && vwapData.length > 0) {
+    if (vwapSeries && vwapData && vwapData.length > 0) {
       vwapSeries.setData(vwapData);
     }
 
@@ -136,29 +170,62 @@ export const Chart = ({
         tooltip.style.display = 'none';
       } else {
         tooltip.style.display = 'block';
-        const dataPoint = param.seriesData.get(lineSeries) as any;
+        const dataPoint = param.seriesData.get(mainSeries) as any;
         if (dataPoint) {
-          const price = dataPoint.value;
-          const timeObj = new Date((param.time as number) * 1000);
-          const timeStr = `${timeObj.getUTCHours().toString().padStart(2, '0')}:${timeObj.getUTCMinutes().toString().padStart(2, '0')}`;
-          
-          let changeStr = '';
-          if (prevClose) {
-            const change = price - prevClose;
-            const changePercent = (change / prevClose) * 100;
-            const color = change > 0 ? '#ff3b30' : change < 0 ? '#34c759' : '#8e8e93';
-            const sign = change > 0 ? '+' : '';
-            changeStr = `<div style="color: ${color}; font-family: monospace; font-size: 11px;">${sign}${changePercent.toFixed(2)}%</div>`;
+          let timeStr = String(param.time);
+          if (typeof param.time === 'number') {
+            const timeObj = new Date(param.time * 1000);
+            if (type === 'area') {
+               timeStr = `${timeObj.getUTCHours().toString().padStart(2, '0')}:${timeObj.getUTCMinutes().toString().padStart(2, '0')}`;
+            } else {
+               timeStr = `${timeObj.getUTCFullYear()}-${(timeObj.getUTCMonth()+1).toString().padStart(2, '0')}-${timeObj.getUTCDate().toString().padStart(2, '0')}`;
+            }
+          } else if (typeof param.time === 'object' && param.time !== null && 'year' in param.time) {
+            const bt = param.time as any;
+            timeStr = `${bt.year}-${String(bt.month).padStart(2, '0')}-${String(bt.day).padStart(2, '0')}`;
           }
 
-          tooltip.innerHTML = `
-            <div style="font-family: monospace; color: #9ca3af; margin-bottom: 2px;">${timeStr}</div>
-            <div style="font-size: 14px; font-weight: bold; font-family: monospace; color: ${textColor};">${price.toFixed(2)}</div>
-            ${changeStr}
-          `;
+          let content = '';
+          if (type === 'area') {
+            const price = dataPoint.value;
+            let changeStr = '';
+            if (prevClose) {
+              const change = price - prevClose;
+              const changePercent = (change / prevClose) * 100;
+              const color = change > 0 ? upColor : change < 0 ? downColor : '#8e8e93';
+              const sign = change > 0 ? '+' : '';
+              changeStr = `<div style="color: ${color}; font-family: monospace; font-size: 11px;">${sign}${changePercent.toFixed(2)}%</div>`;
+            }
+            content = `
+              <div style="font-family: monospace; color: #9ca3af; margin-bottom: 2px;">${timeStr}</div>
+              <div style="font-size: 14px; font-weight: bold; font-family: monospace; color: ${textColor};">${price.toFixed(2)}</div>
+              ${changeStr}
+            `;
+          } else {
+            // Candlestick tooltip
+            const { open, high, low, close } = dataPoint;
+            const change = close - open;
+            const changePercent = (change / open) * 100;
+            const color = change > 0 ? upColor : change < 0 ? downColor : '#8e8e93';
+            const sign = change > 0 ? '+' : '';
+            content = `
+              <div style="font-family: monospace; color: #9ca3af; margin-bottom: 4px; border-bottom: 1px solid #374151; padding-bottom: 2px;">${timeStr}</div>
+              <div style="display: grid; grid-template-columns: auto auto; gap: 2px 8px; font-family: monospace;">
+                <span style="color: #9ca3af;">开盘</span><span style="color: ${textColor}; text-align: right;">${open.toFixed(2)}</span>
+                <span style="color: #9ca3af;">最高</span><span style="color: ${textColor}; text-align: right;">${high.toFixed(2)}</span>
+                <span style="color: #9ca3af;">最低</span><span style="color: ${textColor}; text-align: right;">${low.toFixed(2)}</span>
+                <span style="color: #9ca3af;">收盘</span><span style="color: ${color}; font-weight: bold; text-align: right;">${close.toFixed(2)}</span>
+              </div>
+              <div style="color: ${color}; font-family: monospace; font-size: 11px; margin-top: 4px; text-align: right;">
+                ${sign}${changePercent.toFixed(2)}%
+              </div>
+            `;
+          }
 
-          const toolTipWidth = 80;
-          const toolTipHeight = 60;
+          tooltip.innerHTML = content;
+
+          const toolTipWidth = type === 'area' ? 80 : 120;
+          const toolTipHeight = type === 'area' ? 60 : 100;
           const margin = 12;
           let left = param.point.x + margin;
           if (left > chartContainerRef.current!.clientWidth - toolTipWidth) {
@@ -182,13 +249,13 @@ export const Chart = ({
       chart.remove();
       tooltip.remove();
     };
-  }, [backgroundColor, lineColor, textColor, areaTopColor, areaBottomColor, prevClose]);
+  }, [backgroundColor, lineColor, textColor, areaTopColor, areaBottomColor, prevClose, type, upColor, downColor]);
 
   // Update data when data prop changes without recreating chart
   useEffect(() => {
     if (seriesRef.current && data && data.length > 0) {
       seriesRef.current.setData(data);
-      if (markers) {
+      if (markers && type === 'area') {
         if (!markersPrimitiveRef.current) {
           markersPrimitiveRef.current = createSeriesMarkers(seriesRef.current as any, markers);
         } else {
@@ -196,10 +263,10 @@ export const Chart = ({
         }
       }
     }
-    if (vwapSeriesRef.current && vwapData && vwapData.length > 0) {
+    if (type === 'area' && vwapSeriesRef.current && vwapData && vwapData.length > 0) {
       vwapSeriesRef.current.setData(vwapData);
     }
-  }, [data, vwapData, markers]);
+  }, [data, vwapData, markers, type]);
 
   return <div ref={chartContainerRef} className="w-full h-full relative" />;
 };
