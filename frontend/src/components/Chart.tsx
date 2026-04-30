@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { createChart, ColorType, AreaSeries, LineSeries, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts';
+import { createChart, ColorType, AreaSeries, LineSeries, CandlestickSeries, HistogramSeries, createSeriesMarkers } from 'lightweight-charts';
 import type { ISeriesApi } from 'lightweight-charts';
 
 interface ChartProps {
@@ -8,6 +8,11 @@ interface ChartProps {
   markers?: any[];
   prevClose?: number;
   type?: 'area' | 'candlestick';
+  volumeData?: any[];
+  ma5Data?: any[];
+  ma10Data?: any[];
+  ma20Data?: any[];
+  macdData?: { dif: any[]; dea: any[]; histogram: any[] };
   colors?: {
     backgroundColor?: string;
     lineColor?: string;
@@ -25,6 +30,11 @@ export const Chart = ({
   markers,
   prevClose,
   type = 'area',
+  volumeData,
+  ma5Data,
+  ma10Data,
+  ma20Data,
+  macdData,
   colors: {
     backgroundColor = 'transparent',
     lineColor = '#2962FF',
@@ -39,6 +49,13 @@ export const Chart = ({
   const chartRef = useRef<any>(null);
   const seriesRef = useRef<ISeriesApi<"Area"> | ISeriesApi<"Candlestick"> | null>(null);
   const vwapSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const ma5SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const ma10SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const ma20SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const macdDifRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const macdDeaRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const markersPrimitiveRef = useRef<any>(null);
 
   useEffect(() => {
@@ -84,10 +101,12 @@ export const Chart = ({
       },
       rightPriceScale: {
         borderColor: 'rgba(43, 43, 67, 0.5)',
+        scaleMargins: type === 'candlestick' ? { top: 0.05, bottom: 0.35 } : { top: 0.1, bottom: 0.1 },
       },
       width: chartContainerRef.current.clientWidth,
       height: chartContainerRef.current.clientHeight,
     });
+
     chartRef.current = chart;
 
     let mainSeries;
@@ -105,6 +124,31 @@ export const Chart = ({
         borderVisible: false,
         wickUpColor: upColor,
         wickDownColor: downColor,
+      });
+      
+      // Initialize MAs
+      ma5SeriesRef.current = chart.addSeries(LineSeries, { color: '#E1BEE7', lineWidth: 1, crosshairMarkerVisible: false });
+      ma10SeriesRef.current = chart.addSeries(LineSeries, { color: '#FFB74D', lineWidth: 1, crosshairMarkerVisible: false });
+      ma20SeriesRef.current = chart.addSeries(LineSeries, { color: '#81D4FA', lineWidth: 1, crosshairMarkerVisible: false });
+      
+      // Initialize Volume
+      volumeSeriesRef.current = chart.addSeries(HistogramSeries, {
+        color: '#26a69a',
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'volume',
+      });
+      
+      // Initialize MACD
+      macdDifRef.current = chart.addSeries(LineSeries, { color: '#2962FF', lineWidth: 1, priceScaleId: 'macd', crosshairMarkerVisible: false });
+      macdDeaRef.current = chart.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 1, priceScaleId: 'macd', crosshairMarkerVisible: false });
+      macdHistRef.current = chart.addSeries(HistogramSeries, { priceScaleId: 'macd' });
+
+      // Apply price scale margins AFTER series creation
+      chart.priceScale('volume').applyOptions({
+        scaleMargins: { top: 0.65, bottom: 0.2 },
+      });
+      chart.priceScale('macd').applyOptions({
+        scaleMargins: { top: 0.8, bottom: 0 },
       });
     }
     seriesRef.current = mainSeries;
@@ -266,7 +310,18 @@ export const Chart = ({
     if (type === 'area' && vwapSeriesRef.current && vwapData && vwapData.length > 0) {
       vwapSeriesRef.current.setData(vwapData);
     }
-  }, [data, vwapData, markers, type]);
+    if (type === 'candlestick') {
+      if (ma5SeriesRef.current && ma5Data) ma5SeriesRef.current.setData(ma5Data);
+      if (ma10SeriesRef.current && ma10Data) ma10SeriesRef.current.setData(ma10Data);
+      if (ma20SeriesRef.current && ma20Data) ma20SeriesRef.current.setData(ma20Data);
+      if (volumeSeriesRef.current && volumeData) volumeSeriesRef.current.setData(volumeData);
+      if (macdData && macdData.dif && macdData.dea && macdData.histogram) {
+        if (macdDifRef.current) macdDifRef.current.setData(macdData.dif);
+        if (macdDeaRef.current) macdDeaRef.current.setData(macdData.dea);
+        if (macdHistRef.current) macdHistRef.current.setData(macdData.histogram);
+      }
+    }
+  }, [data, vwapData, markers, type, ma5Data, ma10Data, ma20Data, volumeData, macdData]);
 
   return <div ref={chartContainerRef} className="w-full h-full relative" />;
 };

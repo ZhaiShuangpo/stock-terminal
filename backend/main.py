@@ -241,6 +241,39 @@ async def get_kline_data(symbol: str, period: str = "day", limit: int = 100):
             return None
     return None
 
+def calculate_ema(data_list, period):
+    k = 2 / (period + 1)
+    ema_list = []
+    ema = data_list[0]
+    for i, val in enumerate(data_list):
+        if i == 0:
+            ema_list.append(val)
+        else:
+            ema = val * k + ema * (1 - k)
+            ema_list.append(ema)
+    return ema_list
+
+def calculate_macd(close_prices, short_period=12, long_period=26, signal_period=9):
+    if len(close_prices) < long_period:
+        return [], [], []
+    ema_short = calculate_ema(close_prices, short_period)
+    ema_long = calculate_ema(close_prices, long_period)
+    dif = [s - l for s, l in zip(ema_short, ema_long)]
+    dea = calculate_ema(dif, signal_period)
+    macd = [(d - de) * 2 for d, de in zip(dif, dea)]
+    return dif, dea, macd
+
+def calculate_ma(close_prices, period):
+    if len(close_prices) < period:
+        return []
+    ma_list = []
+    for i in range(len(close_prices)):
+        if i < period - 1:
+            ma_list.append(None)
+        else:
+            ma_list.append(sum(close_prices[i-period+1:i+1]) / period)
+    return ma_list
+
 @app.get("/api/history")
 async def history_stock(symbol: str, period: str = "day"):
     if not symbol:
@@ -276,26 +309,41 @@ async def analyze_stock(symbol: str, name: str = "", price: str = "", changePerc
         if price and changePercent:
             current_status = f"该股当前最新价为 {price}，今日涨跌幅为 {changePercent}%。"
 
-        # Fetch recent historical data (last 20 days) for AI context
+        # Fetch recent historical data (last 40 days) for AI context to compute indicators
         kline_context = ""
-        recent_klines = await get_kline_data(symbol, "day", 20)
+        recent_klines = await get_kline_data(symbol, "day", 40)
         if recent_klines and len(recent_klines) > 0:
-            kline_text = ", ".join([f"{k[0]}(收:{k[2]})" for k in recent_klines[-10:]])
-            kline_context = f"\n【近10日收盘价走势】：{kline_text}"
+            closes = [float(k[2]) for k in recent_klines]
+            
+            ma5 = calculate_ma(closes, 5)
+            ma20 = calculate_ma(closes, 20)
+            dif, dea, macd = calculate_macd(closes)
+            
+            recent_10 = recent_klines[-10:]
+            kline_text = ""
+            for i, k in enumerate(recent_10):
+                idx = len(recent_klines) - 10 + i
+                c = closes[idx]
+                m5 = f"{ma5[idx]:.2f}" if ma5[idx] else "-"
+                m20 = f"{ma20[idx]:.2f}" if ma20[idx] else "-"
+                md = f"{macd[idx]:.2f}" if macd and len(macd) > idx else "-"
+                kline_text += f"{k[0]}(收:{c}, MA5:{m5}, MA20:{m20}, MACD柱:{md}) "
+                
+            kline_context = f"\n【近10日量价与指标形态】：\n{kline_text}"
 
         prompt = f"""
 作为拥有15年A股游资与机构操盘经验的顶尖操盘手，请对股票 【{stock_identifier}】 进行极速复盘与推演。
 {current_status}{kline_context}
 
-请务必利用你强大的联网搜索能力，检索该股票最新的新闻、公告、以及近期实际走势。结合上述提供的近期K线走势数据。
+请务必利用你强大的联网搜索能力，检索该股票最新的新闻、公告。结合上述提供的近期K线及均线(MA5/MA20)、MACD走势数据。
 基于真实的新闻、基本面、长短期量价形态及A股市场风格的深刻理解，提供以下高密度干货（总字数严格控制在200字以内）：
 
-1. 【资金定性】：结合近十日走势，主力是属于洗盘、出货、试盘还是主升浪加速？
+1. 【资金与技术定性】：结合近十日量价及MACD背离情况，主力是属于洗盘、出货、试盘还是主升浪加速？
 2. 【核心逻辑】：该股最近炒作的核心题材或基本面利好是什么？（一句话点透）
-3. 【关键点位】：给出一个短线或中线的强弱分水岭（具体支撑/阻力价格）。
+3. 【关键点位】：结合MA5和MA20均线，给出一个短线或中线的强弱分水岭（具体支撑/阻力价格）。
 4. 【操作剧本】：明日及本周若高开/低开应采取的应对预案。
 
-要求：语言极度精炼、犀利，多用A股实战术语（如：连板、反包、弱转强、水下捞等），绝对不要废话和免责声明，直接给出你的判断。
+要求：语言极度精炼、犀利，多用A股实战术语（如：连板、反包、弱转强、水下捞、金叉死叉等），绝对不要废话和免责声明，直接给出你的判断。
 """
         models_to_try = ['gemini-2.5-flash', 'gemini-3-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite']
         last_error = None
@@ -334,6 +382,24 @@ async def generate_market_review(data: dict, x_gemini_key: str = Header(None)):
         context = "【今日大盘指数】\n"
         for idx in indices_summary:
             context += f"- {idx['name']}: {idx['price']} ({idx['changePercent']}%)\n"
+            
+        # Fetch technical context for Shanghai Composite Index (sh000001)
+        sh_klines = await get_kline_data("sh000001", "day", 40)
+        if sh_klines and len(sh_klines) > 0:
+            sh_closes = [float(k[2]) for k in sh_klines]
+            sh_ma5 = calculate_ma(sh_closes, 5)
+            sh_ma20 = calculate_ma(sh_closes, 20)
+            _, _, sh_macd = calculate_macd(sh_closes)
+            
+            recent_sh = sh_klines[-5:]
+            context += "\n【上证指数近5日量价及技术形态】\n"
+            for i, k in enumerate(recent_sh):
+                idx = len(sh_klines) - 5 + i
+                c = sh_closes[idx]
+                m5 = f"{sh_ma5[idx]:.2f}" if sh_ma5[idx] else "-"
+                m20 = f"{sh_ma20[idx]:.2f}" if sh_ma20[idx] else "-"
+                md = f"{sh_macd[idx]:.2f}" if sh_macd and len(sh_macd) > idx else "-"
+                context += f"- {k[0]}: 收盘{c}, MA5:{m5}, MA20:{m20}, MACD柱:{md}, 成交量:{k[5]}\n"
         
         context += "\n【自选股表现详情】\n"
         for s in stocks_summary[:15]: # Limit to top 15 to avoid token bloat
@@ -341,27 +407,28 @@ async def generate_market_review(data: dict, x_gemini_key: str = Header(None)):
             
         prompt = f"""
 你是国内顶级游资圈的操盘手与量化研究员，深谙A股的博弈逻辑、情绪周期与资金轮动。现在是盘后复盘时间。
-请你基于以下绝对真实的今日收盘数据，务必利用你的联网搜索能力获取今日最新市场消息，为我生成一份【极客交易员专属】的深度复盘策略报告。
+请你基于以下绝对真实的今日收盘数据及上证指数近5日技术走势（均线与MACD），务必利用你的联网搜索能力获取今日最新市场消息，为我生成一份【极客交易员专属】的深度复盘策略报告。
 
 {context}
 
 请严格使用Markdown格式，输出一份干货满满、逻辑严密的复盘与推演报告。不要任何虚头巴脑的开场白或免责声明。
 
-## 🎯 盘面情绪与大势定调
+## 🎯 盘面情绪与大势技术定调
 * **情绪锚定**: 根据上述指数的涨跌幅差异（如主板与创业板的分化）及今日重大新闻，一针见血地点评今日是冰点、混沌、修复还是高潮？属于缩量博弈还是增量逼空？
+* **技术定调**: 结合上证指数近期的MA5/MA20及MACD量能柱变化，判断大盘目前处于什么技术级别（破位、企稳、主升浪还是顶背离）？
 * **主力路径**: 判断今日赚钱效应的核心主线在哪个方向（大金融、科技、消费还是周期等）？风格偏向于权重搭台还是游资炒妖？
 
 ## ⚔️ 持仓股池（自选）逐个击破与体检
 请对**以上提供的每一只自选股**逐一进行简短但犀利的点评（结合其今日涨跌幅及最新驱动逻辑）：
-* [股票名称]: (比如：今日放量突破/缩量回踩，受xx消息刺激，主力意图如何，明日关注xx支撑/阻力位...)
+* [股票名称]: (结合该股近期实际技术走势，如：今日放量突破/缩量回踩，受xx消息刺激，主力意图如何，明日关注xx支撑/阻力位...)
 （务必覆盖列表中的所有重点股票，如果表现平庸也请指出原因；如果有明显的“领头羊”或“拖油瓶”请重点剖析其背后的资金逻辑和风险点）
 
 ## 🔮 次日沙盘推演与操盘纪律
-* **大盘剧本**: 预测明日指数可能的走势路径（如：惯性冲高回落、探底回升修复、或者横盘震荡）。
+* **大盘剧本**: 预测明日指数可能的走势路径（如：沿MA5惯性冲高、受制MA20探底回升、或者MACD死叉后的横盘震荡）。
 * **应对策略**: 针对明日的剧本，给出一套可执行的仓位管理建议（如：保持底仓，围绕核心主线做T；或者防守反击，关注低位补涨）。
 * **纪律红线**: 结合当前行情特点，设定一条绝对不可触碰的交易红线（例如：严禁追高后排跟风股、严禁抄底左侧破位股等）。
 
-要求：语言极度犀利、专业，多使用A股实战术语（如：卡位、弱转强、龙头溢价、分歧转一致、天地板等）。分析必须有深度、有依据，拒绝平庸的股评家套话。
+要求：语言极度犀利、专业，多使用A股实战技术术语（如：卡位、金叉死叉、量价背离、均线多头排列、水下捞等）。分析必须有深度、有依据，拒绝平庸的股评家套话。
 """
         models_to_try = ['gemini-2.5-flash', 'gemini-3-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite']
         last_error = None

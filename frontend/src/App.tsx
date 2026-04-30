@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { Activity, Settings, Search, X, GripVertical } from 'lucide-react';
 import { Chart } from './components/Chart';
+import { calculateMA, calculateMACD } from './utils/indicators';
 
 // Dnd-kit imports
 import {
@@ -147,6 +148,11 @@ export default function App() {
   const [chartPeriod, setChartPeriod] = useState<'intraday' | 'day' | 'week' | 'month'>('intraday');
   const [intradayData, setIntradayData] = useState<any[]>([]);
   const [vwapData, setVwapData] = useState<any[]>([]);
+  const [volumeData, setVolumeData] = useState<any[]>([]);
+  const [ma5Data, setMa5Data] = useState<any[]>([]);
+  const [ma10Data, setMa10Data] = useState<any[]>([]);
+  const [ma20Data, setMa20Data] = useState<any[]>([]);
+  const [macdData, setMacdData] = useState<{ dif: any[], dea: any[], histogram: any[] } | null>(null);
   const [markers, setMarkers] = useState<any[]>([]);
   const [marketReview, setMarketReview] = useState<string>('');
   const [isReviewing, setIsReviewing] = useState(false);
@@ -305,6 +311,11 @@ export default function App() {
     if (!selectedStock) {
       setIntradayData([]);
       setVwapData([]);
+      setVolumeData([]);
+      setMa5Data([]);
+      setMa10Data([]);
+      setMa20Data([]);
+      setMacdData(null);
       setMarkers([]);
       setFundFlow(null);
       return;
@@ -381,10 +392,23 @@ export default function App() {
           const resHistory = await fetch(`http://localhost:8000/api/history?symbol=${selectedStock.symbol}&period=${chartPeriod}`);
           const dataHistory = await resHistory.json();
           if (dataHistory.data && isMounted) {
-            setIntradayData(dataHistory.data);
+            const rawData = dataHistory.data;
+            setIntradayData(rawData);
             setVwapData([]);
             setMarkers([]);
-            // Don't fetch fund flow for historical data, or keep the old one
+            
+            if (rawData.length > 0) {
+              const volData = rawData.map((d: any) => ({
+                time: d.time,
+                value: d.volume,
+                color: d.close >= d.open ? 'rgba(255, 59, 48, 0.5)' : 'rgba(52, 199, 89, 0.5)'
+              }));
+              setVolumeData(volData);
+              setMa5Data(calculateMA(rawData, 5));
+              setMa10Data(calculateMA(rawData, 10));
+              setMa20Data(calculateMA(rawData, 20));
+              setMacdData(calculateMACD(rawData));
+            }
           }
         }
       } catch (e) {
@@ -697,6 +721,11 @@ export default function App() {
                         setChartPeriod(period.id as any);
                         setIntradayData([]);
                         setVwapData([]);
+                        setVolumeData([]);
+                        setMa5Data([]);
+                        setMa10Data([]);
+                        setMa20Data([]);
+                        setMacdData(null);
                         setMarkers([]);
                       }
                     }}
@@ -706,8 +735,19 @@ export default function App() {
                   </button>
                 ))}
               </div>
-              <div className="h-64 p-0 relative">
-                <Chart data={intradayData} vwapData={chartPeriod === 'intraday' ? vwapData : []} markers={chartPeriod === 'intraday' ? markers : []} prevClose={selectedStock.price - selectedStock.change} type={chartPeriod === 'intraday' ? 'area' : 'candlestick'} colors={{
+              <div className={`p-0 relative ${chartPeriod === 'intraday' ? 'h-64' : 'h-96'}`}>
+                <Chart 
+                  data={intradayData} 
+                  vwapData={chartPeriod === 'intraday' ? vwapData : []} 
+                  markers={chartPeriod === 'intraday' ? markers : []} 
+                  prevClose={selectedStock.price - selectedStock.change} 
+                  type={chartPeriod === 'intraday' ? 'area' : 'candlestick'} 
+                  volumeData={chartPeriod !== 'intraday' ? volumeData : undefined}
+                  ma5Data={chartPeriod !== 'intraday' ? ma5Data : undefined}
+                  ma10Data={chartPeriod !== 'intraday' ? ma10Data : undefined}
+                  ma20Data={chartPeriod !== 'intraday' ? ma20Data : undefined}
+                  macdData={chartPeriod !== 'intraday' && macdData ? macdData : undefined}
+                  colors={{
                     backgroundColor: 'transparent',
                     lineColor: isBossMode ? '#8e8e93' : (selectedStock.changePercent >= 0 ? '#ff3b30' : '#34c759'),
                     textColor: '#D9D9D9',
