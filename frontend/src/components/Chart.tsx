@@ -13,6 +13,8 @@ interface ChartProps {
   ma10Data?: any[];
   ma20Data?: any[];
   macdData?: { dif: any[]; dea: any[]; histogram: any[] };
+  supportPrice?: number;
+  resistancePrice?: number;
   colors?: {
     backgroundColor?: string;
     lineColor?: string;
@@ -35,6 +37,8 @@ export const Chart = ({
   ma10Data,
   ma20Data,
   macdData,
+  supportPrice,
+  resistancePrice,
   colors: {
     backgroundColor = 'transparent',
     lineColor = '#2962FF',
@@ -57,6 +61,8 @@ export const Chart = ({
   const macdDeaRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const markersPrimitiveRef = useRef<any>(null);
+  const supportLineRef = useRef<any>(null);
+  const resistanceLineRef = useRef<any>(null);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -126,11 +132,11 @@ export const Chart = ({
         wickDownColor: downColor,
       });
       
-      // Initialize MAs
-      ma5SeriesRef.current = chart.addSeries(LineSeries, { color: '#E1BEE7', lineWidth: 1, crosshairMarkerVisible: false });
-      ma10SeriesRef.current = chart.addSeries(LineSeries, { color: '#FFB74D', lineWidth: 1, crosshairMarkerVisible: false });
-      ma20SeriesRef.current = chart.addSeries(LineSeries, { color: '#81D4FA', lineWidth: 1, crosshairMarkerVisible: false });
-      
+      // Initialize MAs without horizontal Y-axis lines
+      ma5SeriesRef.current = chart.addSeries(LineSeries, { color: '#E1BEE7', lineWidth: 1, crosshairMarkerVisible: false, priceLineVisible: false, lastValueVisible: false });
+      ma10SeriesRef.current = chart.addSeries(LineSeries, { color: '#FFB74D', lineWidth: 1, crosshairMarkerVisible: false, priceLineVisible: false, lastValueVisible: false });
+      ma20SeriesRef.current = chart.addSeries(LineSeries, { color: '#81D4FA', lineWidth: 1, crosshairMarkerVisible: false, priceLineVisible: false, lastValueVisible: false });
+
       // Initialize Volume
       volumeSeriesRef.current = chart.addSeries(HistogramSeries, {
         color: '#26a69a',
@@ -166,7 +172,7 @@ export const Chart = ({
 
     if (data && data.length > 0) {
       mainSeries.setData(data);
-      if (markers && markers.length > 0 && type === 'area') {
+      if (markers && markers.length > 0) {
         markersPrimitiveRef.current = createSeriesMarkers(mainSeries as any, markers);
       }
       chart.timeScale().fitContent();
@@ -292,6 +298,9 @@ export const Chart = ({
       window.removeEventListener('resize', handleResize);
       chart.remove();
       tooltip.remove();
+      supportLineRef.current = null;
+      resistanceLineRef.current = null;
+      markersPrimitiveRef.current = null;
     };
   }, [backgroundColor, lineColor, textColor, areaTopColor, areaBottomColor, prevClose, type, upColor, downColor]);
 
@@ -305,6 +314,44 @@ export const Chart = ({
         } else {
           markersPrimitiveRef.current.setMarkers(markers);
         }
+      }
+
+      // Handle Support Line
+      if (supportPrice !== undefined && supportPrice !== null) {
+        if (!supportLineRef.current) {
+          supportLineRef.current = seriesRef.current.createPriceLine({
+            price: supportPrice,
+            color: '#ff3b30',
+            lineWidth: 2,
+            lineStyle: 2,
+            axisLabelVisible: true,
+            title: '支撑',
+          });
+        } else {
+          supportLineRef.current.applyOptions({ price: supportPrice });
+        }
+      } else if (supportLineRef.current) {
+        seriesRef.current.removePriceLine(supportLineRef.current);
+        supportLineRef.current = null;
+      }
+
+      // Handle Resistance Line
+      if (resistancePrice !== undefined && resistancePrice !== null) {
+        if (!resistanceLineRef.current) {
+          resistanceLineRef.current = seriesRef.current.createPriceLine({
+            price: resistancePrice,
+            color: '#34c759',
+            lineWidth: 2,
+            lineStyle: 2,
+            axisLabelVisible: true,
+            title: '压力',
+          });
+        } else {
+          resistanceLineRef.current.applyOptions({ price: resistancePrice });
+        }
+      } else if (resistanceLineRef.current) {
+        seriesRef.current.removePriceLine(resistanceLineRef.current);
+        resistanceLineRef.current = null;
       }
     }
     if (type === 'area' && vwapSeriesRef.current && vwapData && vwapData.length > 0) {
@@ -321,7 +368,7 @@ export const Chart = ({
         if (macdHistRef.current) macdHistRef.current.setData(macdData.histogram);
       }
     }
-  }, [data, vwapData, markers, type, ma5Data, ma10Data, ma20Data, volumeData, macdData]);
+  }, [data, vwapData, markers, type, ma5Data, ma10Data, ma20Data, volumeData, macdData, supportPrice, resistancePrice]);
 
   return <div ref={chartContainerRef} className="w-full h-full relative" />;
 };

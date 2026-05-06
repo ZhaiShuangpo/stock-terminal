@@ -336,14 +336,23 @@ async def analyze_stock(symbol: str, name: str = "", price: str = "", changePerc
 {current_status}{kline_context}
 
 请务必利用你强大的联网搜索能力，检索该股票最新的新闻、公告。结合上述提供的近期K线及均线(MA5/MA20)、MACD走势数据。
-基于真实的新闻、基本面、长短期量价形态及A股市场风格的深刻理解，提供以下高密度干货（总字数严格控制在200字以内）：
+基于真实的新闻、基本面、长短期量价形态及A股市场风格的深刻理解，提供以下高密度干货：
 
 1. 【资金与技术定性】：结合近十日量价及MACD背离情况，主力是属于洗盘、出货、试盘还是主升浪加速？
 2. 【核心逻辑】：该股最近炒作的核心题材或基本面利好是什么？（一句话点透）
-3. 【关键点位】：结合MA5和MA20均线，给出一个短线或中线的强弱分水岭（具体支撑/阻力价格）。
+3. 【关键点位】：结合MA5和MA20均线，给出一个短线的强支撑位和强压力位。
 4. 【操作剧本】：明日及本周若高开/低开应采取的应对预案。
 
-要求：语言极度精炼、犀利，多用A股实战术语（如：连板、反包、弱转强、水下捞、金叉死叉等），绝对不要废话和免责声明，直接给出你的判断。
+要求语言极度精炼、犀利，多用A股实战术语（如：连板、反包、弱转强、水下捞、金叉死叉等），绝对不要废话和免责声明。
+
+【强制格式要求】
+你必须返回一个严格合法的 JSON 对象，不要包含 markdown 代码块(如 ```json)包装，直接返回 JSON 字符串。格式如下：
+{{
+  "analysis": "上面要求的1到4点的文本分析，可以包含换行符（注意转义）",
+  "support": 14.50,  // (可选，数字类型) 从你的分析中提取的具体强支撑位价格，如果没有明确支撑位请返回 null
+  "resistance": 15.80, // (可选，数字类型) 从你的分析中提取的具体强压力位价格，如果没有明确压力位请返回 null
+  "winRate": "B+" // (字符串) 给出胜率评级，必须是 "A" (强烈看多), "B+" (谨慎看多), "B-" (观望), "C" (看空) 之一
+}}
 """
         models_to_try = ['gemini-2.5-flash', 'gemini-3-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite']
         last_error = None
@@ -357,7 +366,17 @@ async def analyze_stock(symbol: str, name: str = "", price: str = "", changePerc
                         tools=[{"google_search": {}}],
                     )
                 )
-                return {"analysis": response.text}
+                import json
+                import re
+                try:
+                    text = response.text.strip()
+                    if text.startswith("```"):
+                        text = re.sub(r"^```(?:json)?\n", "", text)
+                        text = re.sub(r"\n```$", "", text)
+                    res_data = json.loads(text)
+                    return res_data
+                except json.JSONDecodeError:
+                    return {"analysis": response.text, "support": None, "resistance": None, "winRate": None}
             except Exception as e:
                 print(f"Model {model_name} failed: {e}")
                 last_error = e

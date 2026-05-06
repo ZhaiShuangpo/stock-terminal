@@ -127,6 +127,13 @@ const SortableRow = ({
   );
 };
 
+interface AIAnalysisResult {
+  analysis: string;
+  support?: number | null;
+  resistance?: number | null;
+  winRate?: string | null;
+}
+
 export default function App() {
   const [stocks, setStocks] = useState<StockData[]>([]);
   const [connected, setConnected] = useState(false);
@@ -143,7 +150,7 @@ export default function App() {
     localStorage.setItem('gemini_api_key', apiKey);
   }, [apiKey]);
 
-  const [aiAnalyses, setAiAnalyses] = useState<Record<string, string>>({});
+  const [aiAnalyses, setAiAnalyses] = useState<Record<string, AIAnalysisResult>>({});
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [chartPeriod, setChartPeriod] = useState<'intraday' | 'day' | 'week' | 'month'>('intraday');
   const [intradayData, setIntradayData] = useState<any[]>([]);
@@ -365,15 +372,27 @@ export default function App() {
               // Volume breakout logic: minVol > 3 * MA(10)
               if (volWindow.length >= 10) {
                 const maVol = volWindow.reduce((a, b) => a + b, 0) / volWindow.length;
-                if (maVol > 0 && minVol > maVol * 3 && price > (chartData[chartData.length - 2]?.value || 0)) {
-                  newMarkers.push({
-                    time,
-                    position: 'belowBar',
-                    color: '#ff3b30',
-                    shape: 'arrowUp',
-                    text: 'B',
-                    size: 1,
-                  });
+                if (maVol > 0 && minVol > maVol * 3) {
+                  const prevPrice = chartData[chartData.length - 2]?.value || 0;
+                  if (price > prevPrice) {
+                    newMarkers.push({
+                      time,
+                      position: 'belowBar',
+                      color: '#ff3b30',
+                      shape: 'arrowUp',
+                      text: 'B',
+                      size: 1,
+                    });
+                  } else if (price < prevPrice) {
+                    newMarkers.push({
+                      time,
+                      position: 'aboveBar',
+                      color: '#34c759',
+                      shape: 'arrowDown',
+                      text: 'S',
+                      size: 1,
+                    });
+                  }
                 }
                 volWindow.shift();
               }
@@ -395,7 +414,6 @@ export default function App() {
             const rawData = dataHistory.data;
             setIntradayData(rawData);
             setVwapData([]);
-            setMarkers([]);
             
             if (rawData.length > 0) {
               const volData = rawData.map((d: any) => ({
@@ -404,10 +422,36 @@ export default function App() {
                 color: d.close >= d.open ? 'rgba(255, 59, 48, 0.5)' : 'rgba(52, 199, 89, 0.5)'
               }));
               setVolumeData(volData);
-              setMa5Data(calculateMA(rawData, 5));
+              const ma5 = calculateMA(rawData, 5);
+              const ma20 = calculateMA(rawData, 20);
+              setMa5Data(ma5);
               setMa10Data(calculateMA(rawData, 10));
-              setMa20Data(calculateMA(rawData, 20));
+              setMa20Data(ma20);
               setMacdData(calculateMACD(rawData));
+              
+              // Generate B/S signals from MA5 and MA20 crossover
+              const histMarkers: any[] = [];
+              const ma5Dict = new Map(ma5.map(d => [d.time, d.value]));
+              const ma20Dict = new Map(ma20.map(d => [d.time, d.value]));
+              let prevMa5: number | null = null;
+              let prevMa20: number | null = null;
+              
+              for (const item of rawData) {
+                const currentMa5 = ma5Dict.get(item.time);
+                const currentMa20 = ma20Dict.get(item.time);
+                if (currentMa5 !== undefined && currentMa20 !== undefined && prevMa5 !== null && prevMa20 !== null) {
+                  if (prevMa5 <= prevMa20 && currentMa5 > currentMa20) {
+                    histMarkers.push({ time: item.time, position: 'belowBar', color: '#ff3b30', shape: 'arrowUp', text: 'B', size: 1 });
+                  } else if (prevMa5 >= prevMa20 && currentMa5 < currentMa20) {
+                    histMarkers.push({ time: item.time, position: 'aboveBar', color: '#34c759', shape: 'arrowDown', text: 'S', size: 1 });
+                  }
+                }
+                if (currentMa5 !== undefined) prevMa5 = currentMa5;
+                if (currentMa20 !== undefined) prevMa20 = currentMa20;
+              }
+              setMarkers(histMarkers);
+            } else {
+              setMarkers([]);
             }
           }
         }
@@ -739,7 +783,7 @@ export default function App() {
                 <Chart 
                   data={intradayData} 
                   vwapData={chartPeriod === 'intraday' ? vwapData : []} 
-                  markers={chartPeriod === 'intraday' ? markers : []} 
+                  markers={markers} 
                   prevClose={selectedStock.price - selectedStock.change} 
                   type={chartPeriod === 'intraday' ? 'area' : 'candlestick'} 
                   volumeData={chartPeriod !== 'intraday' ? volumeData : undefined}
@@ -747,6 +791,8 @@ export default function App() {
                   ma10Data={chartPeriod !== 'intraday' ? ma10Data : undefined}
                   ma20Data={chartPeriod !== 'intraday' ? ma20Data : undefined}
                   macdData={chartPeriod !== 'intraday' && macdData ? macdData : undefined}
+                  supportPrice={aiAnalyses[selectedStock.symbol]?.support ?? undefined}
+                  resistancePrice={aiAnalyses[selectedStock.symbol]?.resistance ?? undefined}
                   colors={{
                     backgroundColor: 'transparent',
                     lineColor: isBossMode ? '#8e8e93' : (selectedStock.changePercent >= 0 ? '#ff3b30' : '#34c759'),
@@ -768,21 +814,28 @@ export default function App() {
                         if (!apiKey) { setShowSettings(true); return; }
                         setIsAnalyzing(true); 
                         const currentSymbol = selectedStock.symbol;
-                        setAiAnalyses(prev => ({ ...prev, [currentSymbol]: 'Gemini 思考中...' }));
+                        setAiAnalyses(prev => ({ ...prev, [currentSymbol]: { analysis: 'Gemini 思考中...' } }));
                         try {
                           const res = await fetch(`http://localhost:8000/api/analyze?symbol=${currentSymbol}&name=${encodeURIComponent(selectedStock.name)}&price=${selectedStock.price}&changePercent=${selectedStock.changePercent}`, { headers: { 'X-Gemini-Key': apiKey } });
                           const data = await res.json(); 
-                          setAiAnalyses(prev => ({ ...prev, [currentSymbol]: data.analysis || '分析失败，请重试' }));
+                          setAiAnalyses(prev => ({ ...prev, [currentSymbol]: data.analysis ? data : { analysis: '分析失败，请重试' } }));
                         } catch (e) { 
-                          setAiAnalyses(prev => ({ ...prev, [currentSymbol]: '网络错误，无法连接到分析引擎' })); 
+                          setAiAnalyses(prev => ({ ...prev, [currentSymbol]: { analysis: '网络错误，无法连接到分析引擎' } })); 
                         } finally { setIsAnalyzing(false); }
                       }}
                       className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors disabled:opacity-50"
                     >{isAnalyzing ? '分析中...' : '开始推演'}</button>
                   </div>
                   <p className="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">
-                    {aiAnalyses[selectedStock.symbol] || "点击「开始推演」，Gemini 将结合最新消息和资金面为您归因。"}
+                    {aiAnalyses[selectedStock.symbol]?.analysis || "点击「开始推演」，Gemini 将结合最新消息和资金面为您归因。"}
                   </p>
+                  {aiAnalyses[selectedStock.symbol]?.winRate && (
+                    <div className="mt-3 p-2 bg-blue-950/30 rounded border border-blue-900/30 flex space-x-6 text-xs font-mono">
+                      {aiAnalyses[selectedStock.symbol]?.support && <span className="text-[var(--color-stock-red)]">支撑(防守): {aiAnalyses[selectedStock.symbol]?.support?.toFixed(2)}</span>}
+                      {aiAnalyses[selectedStock.symbol]?.resistance && <span className="text-[var(--color-stock-green)]">压力(进攻): {aiAnalyses[selectedStock.symbol]?.resistance?.toFixed(2)}</span>}
+                      <span className="text-blue-300 font-bold">胜率评级: {aiAnalyses[selectedStock.symbol]?.winRate}</span>
+                    </div>
+                  )}
                 </div>
               )}
               <div className="grid grid-cols-2 gap-4 text-sm">
