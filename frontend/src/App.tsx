@@ -42,6 +42,15 @@ interface Group {
   symbols: string[];
 }
 
+interface PaperTrade {
+  id: string;
+  symbol: string;
+  name: string;
+  buyPrice: number;
+  buyTime: number;
+  aiLogic: string;
+}
+
 // Sortable Row Component
 interface SortableRowProps {
   stock: StockData;
@@ -171,6 +180,15 @@ export default function App() {
   const [sectors, setSectors] = useState<any[]>([]);
   const [alertStream, setAlertStream] = useState<any[]>([]);
   const [fundFlow, setFundFlow] = useState<any>(null);
+
+  const [paperTrades, setPaperTrades] = useState<PaperTrade[]>(() => {
+    const saved = localStorage.getItem('paper_trades');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('paper_trades', JSON.stringify(paperTrades));
+  }, [paperTrades]);
 
   const [groups, setGroups] = useState<Group[]>(() => {
     const saved = localStorage.getItem('stock_groups');
@@ -599,7 +617,7 @@ export default function App() {
           <div className="h-4 w-px bg-gray-700 mx-2"></div>
           {!isBossMode && (
             <nav className="flex space-x-1">
-              {[{ id: 'dashboard', name: '行情中心' }, { id: 'alerts', name: '异动预警' }, { id: 'ai', name: '智能复盘' }].map((tab) => (
+              {[{ id: 'dashboard', name: '行情中心' }, { id: 'alerts', name: '异动预警' }, { id: 'ai', name: '智能复盘' }, { id: 'paper', name: '虚拟交易' }].map((tab) => (
                 <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                   className={`px-3 py-1 rounded-md transition-colors ${activeTab === tab.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'}`}>
                   {tab.name}
@@ -794,6 +812,45 @@ export default function App() {
                 </div>
               </div>
             </div>
+          ) : activeTab === 'paper' ? (
+            <div className="flex-1 flex flex-col p-8 overflow-hidden">
+               <div className="flex items-center justify-between mb-8">
+                 <h2 className="text-2xl font-bold">虚拟交易与胜率回测</h2>
+                 <button onClick={() => { if(window.confirm('确定清空所有交易记录？')) setPaperTrades([]); }} className="text-xs text-gray-500 hover:text-white">清空记录</button>
+               </div>
+               <div className="flex-1 overflow-auto space-y-4">
+                 {paperTrades.length === 0 ? <div className="text-center text-gray-500 mt-20">暂无虚拟交易记录。<br/>在个股详情面板点击「记录虚拟买入」开始测试你的策略。</div> : paperTrades.slice().reverse().map(trade => {
+                   const currentStock = stocks.find(s => s.symbol === trade.symbol);
+                   const currentPrice = currentStock?.price || trade.buyPrice;
+                   const pnl = currentPrice - trade.buyPrice;
+                   const pnlPercent = (pnl / trade.buyPrice) * 100;
+                   return (
+                     <div key={trade.id} className="bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-colors">
+                       <div className="flex justify-between items-start mb-4 border-b border-gray-800 pb-4">
+                         <div>
+                           <div className="font-bold text-lg">{trade.name} <span className="text-gray-500 text-sm font-normal">{trade.symbol}</span></div>
+                           <div className="text-xs text-gray-500 mt-1">买入时间: {new Date(trade.buyTime).toLocaleString()}</div>
+                         </div>
+                         <div className="text-right">
+                           <div className="text-xs text-gray-500 mb-1">当前浮亏/浮盈</div>
+                           <div className={`text-xl font-bold font-mono ${pnl >= 0 ? 'text-[var(--color-stock-red)]' : 'text-[var(--color-stock-green)]'}`}>
+                             {pnl > 0 ? '+' : ''}{pnlPercent.toFixed(2)}%
+                           </div>
+                         </div>
+                       </div>
+                       <div className="grid grid-cols-2 gap-4 mb-4 text-sm font-mono bg-black p-3 rounded">
+                         <div><span className="text-gray-500">买入价格:</span> {trade.buyPrice.toFixed(2)}</div>
+                         <div><span className="text-gray-500">当前价格:</span> {currentPrice.toFixed(2)}</div>
+                       </div>
+                       <div className="text-sm">
+                         <span className="text-blue-400 font-bold mb-1 block">买入时的 AI 逻辑 / 策略理由：</span>
+                         <p className="text-gray-400 whitespace-pre-wrap bg-blue-950/20 p-3 rounded border border-blue-900/30">{trade.aiLogic}</p>
+                       </div>
+                     </div>
+                   );
+                 })}
+               </div>
+            </div>
           ) : null}
         </section>
 
@@ -850,36 +907,77 @@ export default function App() {
                 ))}
               </div>
               <div className={`p-0 relative ${chartPeriod === 'intraday' ? 'h-64' : 'h-96'}`}>
-                <Chart 
-                  data={intradayData} 
-                  vwapData={chartPeriod === 'intraday' ? vwapData : []} 
-                  markers={markers} 
-                  prevClose={selectedStock.price - selectedStock.change} 
-                  type={chartPeriod === 'intraday' ? 'area' : 'candlestick'} 
-                  volumeData={chartPeriod !== 'intraday' ? volumeData : undefined}
-                  ma5Data={chartPeriod !== 'intraday' ? ma5Data : undefined}
-                  ma10Data={chartPeriod !== 'intraday' ? ma10Data : undefined}
-                  ma20Data={chartPeriod !== 'intraday' ? ma20Data : undefined}
-                  macdData={chartPeriod !== 'intraday' && macdData ? macdData : undefined}
-                  supportPrice={aiAnalyses[selectedStock.symbol]?.support ?? undefined}
-                  resistancePrice={aiAnalyses[selectedStock.symbol]?.resistance ?? undefined}
-                  colors={{
-                    backgroundColor: 'transparent',
-                    lineColor: isBossMode ? '#8e8e93' : (selectedStock.changePercent >= 0 ? '#ff3b30' : '#34c759'),
-                    textColor: '#D9D9D9',
-                    areaTopColor: isBossMode ? 'rgba(142, 142, 147, 0.4)' : (selectedStock.changePercent >= 0 ? 'rgba(255, 59, 48, 0.4)' : 'rgba(52, 199, 89, 0.4)'),
-                    areaBottomColor: 'rgba(0, 0, 0, 0)',
-                    upColor: '#ff3b30',
-                    downColor: '#34c759',
-                  }}
-                />
+                {isBossMode ? (
+                  <div className="w-full h-full p-4 font-mono text-green-500 bg-black overflow-hidden flex flex-col">
+                    <div className="text-xs mb-2 text-green-400">root@server:~# top -b -n 1</div>
+                    <div className="text-xs mb-4">
+                      Tasks: 135 total,   1 running, 134 sleeping,   0 stopped,   0 zombie<br/>
+                      %Cpu(s):  {Math.floor(Math.random() * 20 + 10).toFixed(1)} us,   {Math.floor(Math.random() * 5 + 1).toFixed(1)} sy,   0.0 ni,  {Math.floor(Math.random() * 20 + 60).toFixed(1)} id,   0.0 wa<br/>
+                      MiB Mem :  16384.0 total,   {Math.floor(Math.random() * 4000 + 1000).toFixed(1)} free,   8192.0 used,   {Math.floor(Math.random() * 4000 + 1000).toFixed(1)} buff/cache
+                    </div>
+                    <div className="flex-1 border border-green-900/50 rounded bg-green-950/10 p-2 relative overflow-hidden">
+                       <div className="absolute inset-0 flex items-end justify-between px-1 opacity-50">
+                         {Array.from({ length: 40 }).map((_, i) => (
+                           <div key={i} className="w-2 bg-green-500 rounded-t-sm transition-all duration-500" style={{ height: `${Math.random() * 100}%` }}></div>
+                         ))}
+                       </div>
+                       <div className="absolute inset-0 flex items-center justify-center opacity-20 pointer-events-none">
+                         <Activity className="w-32 h-32 text-green-500 animate-pulse" />
+                       </div>
+                    </div>
+                  </div>
+                ) : (
+                  <Chart 
+                    data={intradayData} 
+                    vwapData={chartPeriod === 'intraday' ? vwapData : []} 
+                    markers={markers} 
+                    prevClose={selectedStock.price - selectedStock.change} 
+                    type={chartPeriod === 'intraday' ? 'area' : 'candlestick'} 
+                    volumeData={chartPeriod !== 'intraday' ? volumeData : undefined}
+                    ma5Data={chartPeriod !== 'intraday' ? ma5Data : undefined}
+                    ma10Data={chartPeriod !== 'intraday' ? ma10Data : undefined}
+                    ma20Data={chartPeriod !== 'intraday' ? ma20Data : undefined}
+                    macdData={chartPeriod !== 'intraday' && macdData ? macdData : undefined}
+                    supportPrice={aiAnalyses[selectedStock.symbol]?.support ?? undefined}
+                    resistancePrice={aiAnalyses[selectedStock.symbol]?.resistance ?? undefined}
+                    colors={{
+                      backgroundColor: 'transparent',
+                      lineColor: selectedStock.changePercent >= 0 ? '#ff3b30' : '#34c759',
+                      textColor: '#D9D9D9',
+                      areaTopColor: selectedStock.changePercent >= 0 ? 'rgba(255, 59, 48, 0.4)' : 'rgba(52, 199, 89, 0.4)',
+                      areaBottomColor: 'rgba(0, 0, 0, 0)',
+                      upColor: '#ff3b30',
+                      downColor: '#34c759',
+                    }}
+                  />
+                )}
               </div>
             </div>
             <div className="flex-1 p-4 overflow-auto">
-              {!isBossMode && (
-                <div className="bg-blue-900/10 border border-blue-900/50 rounded-lg p-3 mb-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-blue-400 font-medium">✨ Gemini AI 异动分析</span>
+              {!isBossMode ? (
+                <>
+                  <div className="flex justify-between items-center mb-4">
+                    <button 
+                      onClick={() => {
+                        const newTrade: PaperTrade = {
+                          id: Date.now().toString(),
+                          symbol: selectedStock.symbol,
+                          name: selectedStock.name,
+                          buyPrice: selectedStock.price,
+                          buyTime: Date.now(),
+                          aiLogic: aiAnalyses[selectedStock.symbol]?.analysis || '手动盘中发起',
+                        };
+                        setPaperTrades([...paperTrades, newTrade]);
+                        alert('已记录虚拟买入，可在"虚拟交易"面板追踪盈亏');
+                      }}
+                      className="w-full py-2 bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 text-white font-bold rounded-lg shadow-lg shadow-red-500/20 transition-all"
+                    >
+                      记录虚拟买入
+                    </button>
+                  </div>
+                  <div className="bg-blue-900/10 border border-blue-900/50 rounded-lg p-3 mb-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-blue-400 font-medium">✨ Gemini AI 异动分析</span>
                     <button disabled={isAnalyzing} onClick={async () => {
                         if (!apiKey) { setShowSettings(true); return; }
                         setIsAnalyzing(true); 
@@ -907,13 +1005,12 @@ export default function App() {
                     </div>
                   )}
                 </div>
-              )}
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div className="flex justify-between"><span className="text-gray-500">今开</span><span className={getColorClass(selectedStock.price - selectedStock.change)}>{(selectedStock.price - selectedStock.change).toFixed(2)}</span></div>
                 <div className="flex justify-between"><span className="text-gray-500">昨收</span><span>{(selectedStock.price - selectedStock.change).toFixed(2)}</span></div>
                 <div className="flex justify-between"><span className="text-gray-500">最高</span><span className="text-[var(--color-stock-red)]">{(selectedStock.high || 0).toFixed(2)}</span></div>
                 <div className="flex justify-between"><span className="text-gray-500">最低</span><span className="text-[var(--color-stock-green)]">{(selectedStock.low || 0).toFixed(2)}</span></div>
-                {!isBossMode && fundFlow && (
+                {fundFlow && (
                   <>
                     <div className="flex justify-between">
                       <span className="text-gray-500 font-bold">主力净流入</span>
@@ -926,6 +1023,15 @@ export default function App() {
                   </>
                 )}
               </div>
+              </>
+              ) : (
+                <div className="text-green-500 font-mono text-xs whitespace-pre-wrap">
+                  [OK] Memory checks passed.<br/>
+                  [INFO] Connecting to worker {selectedStock.code.slice(-4)}...<br/>
+                  [INFO] Established secure tunnel.<br/>
+                  [DATA] Streaming logs...
+                </div>
+              )}
             </div>
           </aside>
         )}
