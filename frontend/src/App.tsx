@@ -26,6 +26,8 @@ interface StockData {
   symbol: string;
   name: string;
   price: number;
+  high: number;
+  low: number;
   change: number;
   changePercent: number;
   volume: number;
@@ -640,7 +642,7 @@ export default function App() {
                 {isSearching ? <div className="px-3 py-2 text-xs text-gray-500">Searching...</div> : searchResults.length > 0 ? searchResults.map(res => (
                   <button key={res.symbol} onClick={() => {
                     setGroups(prev => prev.map(g => (g.id === 'all' || g.id === activeGroupId) ? { ...g, symbols: g.symbols.includes(res.symbol) ? g.symbols : [res.symbol, ...g.symbols] } : g));
-                    setStocks(prev => prev.some(s => s.symbol === res.symbol) ? prev : [{ symbol: res.symbol, code: res.code, name: res.name, price: 0, change: 0, changePercent: 0, volume: 0, amount: 0, trend: [] } as StockData, ...prev]);
+                    setStocks(prev => prev.some(s => s.symbol === res.symbol) ? prev : [{ symbol: res.symbol, code: res.code, name: res.name, price: 0, high: 0, low: 0, change: 0, changePercent: 0, volume: 0, amount: 0, trend: [] } as StockData, ...prev]);
                     setSearchQuery('');
                   }} className="w-full text-left px-3 py-2 hover:bg-gray-800 text-xs flex justify-between items-center group transition-colors">
                     <span className="text-gray-300 group-hover:text-white">{res.name}</span>
@@ -909,8 +911,8 @@ export default function App() {
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div className="flex justify-between"><span className="text-gray-500">今开</span><span className={getColorClass(selectedStock.price - selectedStock.change)}>{(selectedStock.price - selectedStock.change).toFixed(2)}</span></div>
                 <div className="flex justify-between"><span className="text-gray-500">昨收</span><span>{(selectedStock.price - selectedStock.change).toFixed(2)}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">最高</span><span className="text-[var(--color-stock-red)]">{(selectedStock.price * 1.02).toFixed(2)}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">最低</span><span className="text-[var(--color-stock-green)]">{(selectedStock.price * 0.98).toFixed(2)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">最高</span><span className="text-[var(--color-stock-red)]">{selectedStock.high.toFixed(2)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">最低</span><span className="text-[var(--color-stock-green)]">{selectedStock.low.toFixed(2)}</span></div>
                 {!isBossMode && fundFlow && (
                   <>
                     <div className="flex justify-between">

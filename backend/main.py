@@ -133,6 +133,8 @@ async def fetch_tencent_data(symbols: List[str]):
                         "symbol": code_prefix,
                         "name": name,
                         "price": price,
+                        "high": float(fields[33]),
+                        "low": float(fields[34]),
                         "change": change,
                         "changePercent": change_percent,
                         "volume": volume,
@@ -208,9 +210,13 @@ async def fundflow_stock(symbol: str):
             data = response.json()
             if data and len(data) > 0:
                 item = data[0]
+                # Sina's r0_net is super large order net inflow, r1_net is large order net inflow
+                r0_net = float(item.get("r0_net", 0))
+                r1_net = float(item.get("r1_net", 0))
+                main_net_amount = r0_net + r1_net
                 return {
                     "data": {
-                        "netAmount": float(item.get("netamount", 0)),
+                        "netAmount": main_net_amount,
                         "ratioAmount": float(item.get("ratioamount", 0))
                     }
                 }
