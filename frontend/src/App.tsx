@@ -911,8 +911,8 @@ export default function App() {
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div className="flex justify-between"><span className="text-gray-500">今开</span><span className={getColorClass(selectedStock.price - selectedStock.change)}>{(selectedStock.price - selectedStock.change).toFixed(2)}</span></div>
                 <div className="flex justify-between"><span className="text-gray-500">昨收</span><span>{(selectedStock.price - selectedStock.change).toFixed(2)}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">最高</span><span className="text-[var(--color-stock-red)]">{selectedStock.high.toFixed(2)}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">最低</span><span className="text-[var(--color-stock-green)]">{selectedStock.low.toFixed(2)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">最高</span><span className="text-[var(--color-stock-red)]">{(selectedStock.high || 0).toFixed(2)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">最低</span><span className="text-[var(--color-stock-green)]">{(selectedStock.low || 0).toFixed(2)}</span></div>
                 {!isBossMode && fundFlow && (
                   <>
                     <div className="flex justify-between">
