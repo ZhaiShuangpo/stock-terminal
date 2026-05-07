@@ -617,7 +617,7 @@ export default function App() {
           <div className="h-4 w-px bg-gray-700 mx-2"></div>
           {!isBossMode && (
             <nav className="flex space-x-1">
-              {[{ id: 'dashboard', name: '行情中心' }, { id: 'alerts', name: '异动预警' }, { id: 'ai', name: '智能复盘' }, { id: 'paper', name: '虚拟交易' }].map((tab) => (
+              {[{ id: 'dashboard', name: '行情中心' }, { id: 'sectors', name: '板块涨幅' }, { id: 'alerts', name: '异动预警' }, { id: 'ai', name: '智能复盘' }, { id: 'paper', name: '虚拟交易' }].map((tab) => (
                 <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                   className={`px-3 py-1 rounded-md transition-colors ${activeTab === tab.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'}`}>
                   {tab.name}
@@ -627,19 +627,6 @@ export default function App() {
           )}
         </div>
         <div className="flex items-center space-x-4 text-gray-400">
-          {!isBossMode && sectors.length > 0 && (
-            <div className="flex items-center space-x-3 mr-2 hidden xl:flex border-r border-gray-700 pr-4">
-              <span className="text-[10px] text-gray-500 uppercase tracking-wider font-bold">🔥 领涨板块</span>
-              {sectors.map(sec => (
-                <div key={sec.name} className="flex flex-col items-center">
-                  <span className="text-[10px] text-gray-300 leading-none mb-1">{sec.name}</span>
-                  <div className="flex items-baseline space-x-1">
-                    <span className={`text-[10px] font-mono ${getColorClass(sec.changePercent)}`}>+{sec.changePercent.toFixed(2)}%</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
           <div className="flex items-center space-x-4 mr-4 hidden lg:flex">
             {indices.map(idx => (
               <div key={idx.code} className="flex flex-col items-center">
@@ -735,6 +722,30 @@ export default function App() {
                 )}
               </div>
             </>
+          ) : activeTab === 'sectors' ? (
+            <div className="flex-1 flex flex-col p-6 overflow-hidden bg-[var(--color-stock-bg)]">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-bold">板块涨跌幅排行榜</h2>
+                <div className="text-xs text-gray-500">数据实时更新</div>
+              </div>
+              <div className="flex-1 overflow-auto">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-10">
+                  {sectors.length === 0 ? (
+                    <div className="col-span-full text-center text-gray-500 mt-20">正在拉取板块数据...</div>
+                  ) : (
+                    sectors.sort((a, b) => b.changePercent - a.changePercent).map((sec, idx) => (
+                      <div key={sec.name} className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col items-center justify-center hover:border-gray-700 transition-colors relative overflow-hidden">
+                        {idx < 3 && <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-red-500 to-orange-500"></div>}
+                        <div className="text-gray-300 font-bold mb-2 text-lg">{sec.name}</div>
+                        <div className={`text-2xl font-mono font-bold ${getColorClass(sec.changePercent)}`}>
+                          {sec.changePercent > 0 ? '+' : ''}{sec.changePercent.toFixed(2)}%
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
           ) : activeTab === 'alerts' ? (
             <div className="flex-1 flex flex-col p-6 overflow-hidden">
               <div className="flex items-center justify-between mb-6">
