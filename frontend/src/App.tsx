@@ -427,25 +427,93 @@ export default function App() {
               setMa5Data(ma5);
               setMa10Data(calculateMA(rawData, 10));
               setMa20Data(ma20);
-              setMacdData(calculateMACD(rawData));
+              const macdObj = calculateMACD(rawData);
+              setMacdData(macdObj);
               
-              // Generate B/S signals from MA5 and MA20 crossover
+              // Generate B/S signals: Resonance (MA + MACD) and Divergence (Price vs MACD)
               const histMarkers: any[] = [];
               const ma5Dict = new Map(ma5.map(d => [d.time, d.value]));
               const ma20Dict = new Map(ma20.map(d => [d.time, d.value]));
+              const difDict = new Map(macdObj.dif.map(d => [d.time, d.value]));
+              const deaDict = new Map(macdObj.dea.map(d => [d.time, d.value]));
+              
               let prevMa5: number | null = null;
               let prevMa20: number | null = null;
+              let lastDivTimeIdx = 0;
               
-              for (const item of rawData) {
+              for (let i = 0; i < rawData.length; i++) {
+                const item = rawData[i];
                 const currentMa5 = ma5Dict.get(item.time);
                 const currentMa20 = ma20Dict.get(item.time);
-                if (currentMa5 !== undefined && currentMa20 !== undefined && prevMa5 !== null && prevMa20 !== null) {
+                const currentDif = difDict.get(item.time);
+                const currentDea = deaDict.get(item.time);
+                
+                // 1. MACD & MA Resonance Strategy
+                if (currentMa5 !== undefined && currentMa20 !== undefined && prevMa5 !== null && prevMa20 !== null && currentDif !== undefined && currentDea !== undefined) {
                   if (prevMa5 <= prevMa20 && currentMa5 > currentMa20) {
-                    histMarkers.push({ time: item.time, position: 'belowBar', color: '#ff3b30', shape: 'arrowUp', text: 'B', size: 1 });
+                    if (currentDif > currentDea) {
+                      histMarkers.push({ time: item.time, position: 'belowBar', color: '#ff2d55', shape: 'arrowUp', text: '强B', size: 2 });
+                    } else {
+                      histMarkers.push({ time: item.time, position: 'belowBar', color: '#ff3b30', shape: 'arrowUp', text: 'B', size: 1 });
+                    }
                   } else if (prevMa5 >= prevMa20 && currentMa5 < currentMa20) {
-                    histMarkers.push({ time: item.time, position: 'aboveBar', color: '#34c759', shape: 'arrowDown', text: 'S', size: 1 });
+                    if (currentDif < currentDea) {
+                      histMarkers.push({ time: item.time, position: 'aboveBar', color: '#34c759', shape: 'arrowDown', text: '强S', size: 2 });
+                    } else {
+                      histMarkers.push({ time: item.time, position: 'aboveBar', color: '#30d158', shape: 'arrowDown', text: 'S', size: 1 });
+                    }
                   }
                 }
+                
+                // 2. MACD Divergence Detection (Top/Bottom)
+                if (i > 30 && (i - lastDivTimeIdx > 10) && currentDif !== undefined) {
+                  let windowHigh = -Infinity;
+                  let windowHighDif = -Infinity;
+                  let windowLow = Infinity;
+                  let windowLowDif = Infinity;
+                  
+                  // Look back window to find local high/low and their MACD DIF
+                  for (let j = i - 20; j < i - 2; j++) {
+                     const jItem = rawData[j];
+                     const jDif = difDict.get(jItem.time) || 0;
+                     if (jItem.high > windowHigh) {
+                        windowHigh = jItem.high;
+                        windowHighDif = jDif;
+                     }
+                     if (jItem.low < windowLow) {
+                        windowLow = jItem.low;
+                        windowLowDif = jDif;
+                     }
+                  }
+                  
+                  // Top Divergence: Price hits new high, but MACD DIF is lower
+                  if (item.high > windowHigh && currentDif < windowHighDif - 0.02) {
+                     histMarkers.push({ time: item.time, position: 'aboveBar', color: '#ff9f0a', shape: 'arrowDown', text: '逃顶', size: 2 });
+                     lastDivTimeIdx = i;
+                  }
+                  // Bottom Divergence: Price hits new low, but MACD DIF is higher
+                  else if (item.low < windowLow && currentDif > windowLowDif + 0.02) {
+                     histMarkers.push({ time: item.time, position: 'belowBar', color: '#bf5af2', shape: 'arrowUp', text: '抄底', size: 2 });
+                     lastDivTimeIdx = i;
+                  }
+                }
+                
+                // 3. Smart Money / Volume Breakout (主力异动)
+                if (i > 20) {
+                  let sumVol = 0;
+                  for (let k = i - 20; k < i; k++) {
+                    sumVol += rawData[k].volume;
+                  }
+                  const avgVol20 = sumVol / 20;
+                  if (item.volume > avgVol20 * 3) {
+                    if (item.close > item.open && item.close > rawData[i-1].close) {
+                      histMarkers.push({ time: item.time, position: 'belowBar', color: '#ffd60a', shape: 'circle', text: '主进', size: 1 });
+                    } else if (item.close < item.open && item.close < rawData[i-1].close) {
+                      histMarkers.push({ time: item.time, position: 'aboveBar', color: '#32ade6', shape: 'circle', text: '主退', size: 1 });
+                    }
+                  }
+                }
+
                 if (currentMa5 !== undefined) prevMa5 = currentMa5;
                 if (currentMa20 !== undefined) prevMa20 = currentMa20;
               }
