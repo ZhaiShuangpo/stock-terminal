@@ -178,6 +178,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [indices, setIndices] = useState<any[]>([]);
   const [sectors, setSectors] = useState<any[]>([]);
+  const [selectedSector, setSelectedSector] = useState<any>(null);
+  const [sectorStocks, setSectorStocks] = useState<any[]>([]);
   const [alertStream, setAlertStream] = useState<any[]>([]);
   const [fundFlow, setFundFlow] = useState<any>(null);
 
@@ -608,6 +610,20 @@ export default function App() {
     }
   };
 
+  const handleSectorClick = async (sec: any) => {
+    setSelectedSector(sec);
+    setSectorStocks([]); // clear old data
+    try {
+      const response = await fetch(`http://localhost:8000/api/sector/${sec.id}`);
+      const data = await response.json();
+      if (data.data) {
+        setSectorStocks(data.data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch sector stocks", e);
+    }
+  };
+
   return (
     <div className={`min-h-screen ${isBossMode ? 'bg-gray-950 grayscale' : 'bg-[var(--color-stock-bg)]'} text-white flex flex-col text-sm transition-all duration-300`}>
       <header className="h-12 border-b border-gray-800 flex items-center justify-between px-4 bg-[var(--color-stock-panel)]">
@@ -724,27 +740,71 @@ export default function App() {
             </>
           ) : activeTab === 'sectors' ? (
             <div className="flex-1 flex flex-col p-6 overflow-hidden bg-[var(--color-stock-bg)]">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold">板块涨跌幅排行榜</h2>
-                <div className="text-xs text-gray-500">数据实时更新</div>
-              </div>
-              <div className="flex-1 overflow-auto">
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-10">
-                  {sectors.length === 0 ? (
-                    <div className="col-span-full text-center text-gray-500 mt-20">正在拉取板块数据...</div>
-                  ) : (
-                    sectors.sort((a, b) => b.changePercent - a.changePercent).map((sec, idx) => (
-                      <div key={sec.name} className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col items-center justify-center hover:border-gray-700 transition-colors relative overflow-hidden">
-                        {idx < 3 && <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-red-500 to-orange-500"></div>}
-                        <div className="text-gray-300 font-bold mb-2 text-lg">{sec.name}</div>
-                        <div className={`text-2xl font-mono font-bold ${getColorClass(sec.changePercent)}`}>
-                          {sec.changePercent > 0 ? '+' : ''}{sec.changePercent.toFixed(2)}%
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
+              {selectedSector ? (
+                <>
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center space-x-4">
+                      <button onClick={() => setSelectedSector(null)} className="text-gray-400 hover:text-white flex items-center">
+                        <span className="mr-1">←</span> 返回板块列表
+                      </button>
+                      <h2 className="text-xl font-bold">{selectedSector.name} <span className="text-sm font-normal text-gray-500 ml-2">成分股</span></h2>
+                    </div>
+                    <div className={`text-xl font-mono font-bold ${getColorClass(selectedSector.changePercent)}`}>
+                      {selectedSector.changePercent > 0 ? '+' : ''}{selectedSector.changePercent.toFixed(2)}%
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-auto">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pb-10">
+                      {sectorStocks.length === 0 ? (
+                        <div className="col-span-full text-center text-gray-500 mt-20">正在拉取成分股数据...</div>
+                      ) : (
+                        sectorStocks.map((stock: any) => (
+                          <div key={stock.symbol} onClick={() => {
+                            // Optionally add to tracking and open chart
+                            const newStock = { symbol: stock.symbol, code: stock.code, name: stock.name, price: stock.price, high: stock.high, low: stock.low, change: stock.change, changePercent: stock.changePercent, volume: stock.volume, amount: stock.amount, trend: [] } as StockData;
+                            setStocks(prev => prev.some(s => s.symbol === stock.symbol) ? prev : [newStock, ...prev]);
+                            setSelectedStock(newStock);
+                            setActiveTab('dashboard');
+                          }} className="bg-gray-900 border border-gray-800 rounded-lg p-3 flex justify-between items-center hover:border-gray-600 transition-colors cursor-pointer group">
+                            <div>
+                              <div className="text-gray-200 font-bold group-hover:text-white transition-colors">{stock.name}</div>
+                              <div className="text-xs text-gray-500 font-mono mt-0.5">{stock.code}</div>
+                            </div>
+                            <div className="text-right">
+                              <div className={`text-base font-mono font-bold ${getColorClass(stock.changePercent)}`}>{stock.price.toFixed(2)}</div>
+                              <div className={`text-xs font-mono ${getColorClass(stock.changePercent)}`}>{stock.changePercent > 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%</div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between mb-6">
+                    <h2 className="text-xl font-bold">板块涨跌幅排行榜</h2>
+                    <div className="text-xs text-gray-500">数据实时更新</div>
+                  </div>
+                  <div className="flex-1 overflow-auto">
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-10">
+                      {sectors.length === 0 ? (
+                        <div className="col-span-full text-center text-gray-500 mt-20">正在拉取板块数据...</div>
+                      ) : (
+                        sectors.sort((a, b) => b.changePercent - a.changePercent).map((sec, idx) => (
+                          <div key={sec.name} onClick={() => handleSectorClick(sec)} className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col items-center justify-center hover:border-gray-600 transition-colors relative overflow-hidden cursor-pointer">
+                            {idx < 3 && <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-red-500 to-orange-500"></div>}
+                            <div className="text-gray-300 font-bold mb-2 text-lg">{sec.name}</div>
+                            <div className={`text-2xl font-mono font-bold ${getColorClass(sec.changePercent)}`}>
+                              {sec.changePercent > 0 ? '+' : ''}{sec.changePercent.toFixed(2)}%
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           ) : activeTab === 'alerts' ? (
             <div className="flex-1 flex flex-col p-6 overflow-hidden">

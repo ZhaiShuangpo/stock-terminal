@@ -36,6 +36,7 @@ async def fetch_sectors():
             for k, v in data.items():
                 parts = v.split(',')
                 sectors.append({
+                    "id": k,
                     "name": parts[1],
                     "changePercent": float(parts[5]),
                     "amount": float(parts[7]),
@@ -43,7 +44,7 @@ async def fetch_sectors():
                     "topStockChange": float(parts[9])
                 })
             sectors.sort(key=lambda x: x["changePercent"], reverse=True)
-            return sectors[:5]
+            return sectors[:40]
         except:
             return []
 
@@ -224,6 +225,34 @@ async def fundflow_stock(symbol: str):
             print(f"Fundflow error: {e}")
             return {"data": None}
     return {"data": None}
+
+@app.get("/api/sector/{sector_id}")
+async def get_sector_stocks(sector_id: str):
+    # Fetch constituent stocks for a given sector
+    url = f"http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page=1&num=40&sort=changepercent&asc=0&node={sector_id}"
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, timeout=5.0)
+            response.encoding = 'gbk'
+            data = response.json()
+            results = []
+            for item in data:
+                results.append({
+                    "symbol": item.get("symbol"),
+                    "code": item.get("code"),
+                    "name": item.get("name"),
+                    "price": float(item.get("trade", 0)),
+                    "change": float(item.get("pricechange", 0)),
+                    "changePercent": float(item.get("changepercent", 0)),
+                    "volume": float(item.get("volume", 0)),
+                    "amount": float(item.get("amount", 0)),
+                    "high": float(item.get("high", 0)),
+                    "low": float(item.get("low", 0)),
+                })
+            return {"data": results}
+        except Exception as e:
+            print(f"Sector fetch error: {e}")
+            return {"data": []}
 
 async def get_kline_data(symbol: str, period: str = "day", limit: int = 100):
     # period: day, week, month
