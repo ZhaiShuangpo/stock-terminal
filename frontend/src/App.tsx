@@ -897,13 +897,16 @@ export default function App() {
                    const pnlPercent = (pnl / trade.buyPrice) * 100;
                    return (
                      <div key={trade.id} className="bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-colors">
-                       <div className="flex justify-between items-start mb-4 border-b border-gray-800 pb-4">
+                         <div className="flex justify-between items-start mb-4 border-b border-gray-800 pb-4">
                          <div>
                            <div className="font-bold text-lg">{trade.name} <span className="text-gray-500 text-sm font-normal">{trade.symbol}</span></div>
                            <div className="text-xs text-gray-500 mt-1">买入时间: {new Date(trade.buyTime).toLocaleString()}</div>
                          </div>
-                         <div className="text-right">
-                           <div className="text-xs text-gray-500 mb-1">当前浮亏/浮盈</div>
+                         <div className="text-right flex flex-col items-end">
+                           <div className="flex items-center space-x-3 mb-1">
+                             <span className="text-xs text-gray-500">当前浮亏/浮盈</span>
+                             <button onClick={() => setPaperTrades(prev => prev.filter(t => t.id !== trade.id))} className="text-xs text-gray-600 hover:text-red-500 transition-colors">删除</button>
+                           </div>
                            <div className={`text-xl font-bold font-mono ${pnl >= 0 ? 'text-[var(--color-stock-red)]' : 'text-[var(--color-stock-green)]'}`}>
                              {pnl > 0 ? '+' : ''}{pnlPercent.toFixed(2)}%
                            </div>
@@ -940,10 +943,16 @@ export default function App() {
               </div>
               <div className="flex items-center space-x-2">
                 {!isBossMode && (
-                  <button onClick={() => {
-                    setGroups(prev => prev.map(g => (activeGroupId === 'all' || g.id === activeGroupId) ? { ...g, symbols: g.symbols.filter(sym => sym !== selectedStock.symbol) } : g));
-                    setSelectedStock(null);
-                  }} className="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700 transition-colors">移除自选</button>
+                  groups.some(g => g.symbols.includes(selectedStock.symbol)) ? (
+                    <button onClick={() => {
+                      setGroups(prev => prev.map(g => (activeGroupId === 'all' || g.id === activeGroupId) ? { ...g, symbols: g.symbols.filter(sym => sym !== selectedStock.symbol) } : g));
+                      setSelectedStock(null);
+                    }} className="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700 transition-colors">移除自选</button>
+                  ) : (
+                    <button onClick={() => {
+                      setGroups(prev => prev.map(g => g.id === 'all' ? { ...g, symbols: [selectedStock.symbol, ...g.symbols] } : g));
+                    }} className="px-2 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs text-white transition-colors">加入自选</button>
+                  )
                 )}
                 <button onClick={() => setSelectedStock(null)} className="p-1 rounded hover:bg-gray-800 text-gray-400 transition-colors"><X className="w-5 h-5" /></button>
               </div>
