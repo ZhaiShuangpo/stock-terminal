@@ -206,6 +206,34 @@ export default function App() {
   });
 
   const [activeGroupId, setActiveGroupId] = useState('all');
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [editingGroupName, setEditingGroupName] = useState('');
+
+  const handleAddGroup = () => {
+    const newGroup: Group = {
+      id: `group_${Date.now()}`,
+      name: '新建分组',
+      bossName: `Worker-${Math.floor(Math.random() * 1000)}`,
+      symbols: []
+    };
+    setGroups([...groups, newGroup]);
+    setEditingGroupId(newGroup.id);
+    setEditingGroupName(newGroup.name);
+  };
+
+  const handleUpdateGroupName = (id: string, newName: string) => {
+    if (newName.trim() === '') return;
+    setGroups(prev => prev.map(g => g.id === id ? { ...g, name: newName } : g));
+    setEditingGroupId(null);
+  };
+
+  const handleDeleteGroup = (id: string) => {
+    if (id === 'all') return;
+    if (window.confirm('确定删除此分组吗？')) {
+      setGroups(prev => prev.filter(g => g.id !== id));
+      if (activeGroupId === id) setActiveGroupId('all');
+    }
+  };
 
   const allSymbols = useMemo(() => Array.from(new Set(groups.flatMap(g => g.symbols))), [groups]);
   
@@ -680,14 +708,39 @@ export default function App() {
       <main className="flex-1 flex overflow-hidden">
         {activeTab === 'dashboard' && (
           <aside className="w-48 border-r border-gray-800 bg-[var(--color-stock-panel)] flex flex-col hidden md:flex">
-            <div className="p-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">分组视图</div>
-            <div className="flex flex-col space-y-0.5 px-2">
+            <div className="p-3 text-xs font-semibold text-gray-500 uppercase tracking-wider flex justify-between items-center">
+              <span>分组视图</span>
+              {!isBossMode && (
+                <button onClick={handleAddGroup} className="hover:text-white transition-colors" title="新建分组">+</button>
+              )}
+            </div>
+            <div className="flex flex-col space-y-0.5 px-2 flex-1 overflow-auto">
               {groups.map((group) => (
-                <button key={group.id} onClick={() => setActiveGroupId(group.id)}
-                  className={`flex items-center justify-between px-3 py-2 rounded-md text-left transition-colors ${activeGroupId === group.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'}`}>
-                  <span className="truncate">{isBossMode ? group.bossName : group.name}</span>
-                  <span className="text-xs bg-gray-900 px-1.5 rounded text-gray-500">{group.symbols.length}</span>
-                </button>
+                <div key={group.id} className={`flex items-center justify-between px-3 py-2 rounded-md text-left transition-colors group ${activeGroupId === group.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'}`}>
+                  {editingGroupId === group.id && !isBossMode ? (
+                    <input 
+                      type="text" 
+                      value={editingGroupName} 
+                      onChange={(e) => setEditingGroupName(e.target.value)}
+                      onBlur={() => handleUpdateGroupName(group.id, editingGroupName)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleUpdateGroupName(group.id, editingGroupName)}
+                      autoFocus
+                      className="bg-black text-white px-1 py-0.5 text-xs rounded border border-blue-500 w-24 outline-none"
+                    />
+                  ) : (
+                    <div className="flex-1 flex items-center justify-between truncate cursor-pointer" onClick={() => setActiveGroupId(group.id)}>
+                      <span className="truncate">{isBossMode ? group.bossName : group.name}</span>
+                      <span className="text-xs bg-gray-900 px-1.5 rounded text-gray-500 ml-2">{group.symbols.length}</span>
+                    </div>
+                  )}
+                  
+                  {!isBossMode && group.id !== 'all' && editingGroupId !== group.id && (
+                     <div className="hidden group-hover:flex items-center space-x-1 ml-2">
+                        <button onClick={() => { setEditingGroupId(group.id); setEditingGroupName(group.name); }} className="text-gray-500 hover:text-blue-400 text-xs">✎</button>
+                        <button onClick={() => handleDeleteGroup(group.id)} className="text-gray-500 hover:text-red-400 text-xs">×</button>
+                     </div>
+                  )}
+                </div>
               ))}
             </div>
           </aside>
