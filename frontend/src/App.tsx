@@ -49,6 +49,9 @@ interface PaperTrade {
   buyPrice: number;
   buyTime: number;
   aiLogic: string;
+  sellPrice?: number;
+  sellTime?: number;
+  sellAiLogic?: string;
 }
 
 // Sortable Row Component
@@ -945,19 +948,29 @@ export default function App() {
                <div className="flex-1 overflow-auto space-y-4">
                  {paperTrades.length === 0 ? <div className="text-center text-gray-500 mt-20">暂无虚拟交易记录。<br/>在个股详情面板点击「记录虚拟买入」开始测试你的策略。</div> : paperTrades.slice().reverse().map(trade => {
                    const currentStock = stocks.find(s => s.symbol === trade.symbol);
-                   const currentPrice = currentStock?.price || trade.buyPrice;
-                   const pnl = currentPrice - trade.buyPrice;
+                   const isClosed = trade.sellPrice !== undefined;
+                   const finalPrice = isClosed ? trade.sellPrice! : (currentStock?.price || trade.buyPrice);
+                   const pnl = finalPrice - trade.buyPrice;
                    const pnlPercent = (pnl / trade.buyPrice) * 100;
                    return (
-                     <div key={trade.id} className="bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-colors">
+                     <div key={trade.id} className={`bg-gray-900 border ${isClosed ? 'border-gray-800' : 'border-blue-900/50'} rounded-xl p-5 hover:border-gray-700 transition-colors`}>
                          <div className="flex justify-between items-start mb-4 border-b border-gray-800 pb-4">
                          <div>
-                           <div className="font-bold text-lg">{trade.name} <span className="text-gray-500 text-sm font-normal">{trade.symbol}</span></div>
-                           <div className="text-xs text-gray-500 mt-1">买入时间: {new Date(trade.buyTime).toLocaleString()}</div>
+                           <div className="font-bold text-lg flex items-center space-x-2">
+                             <span>{trade.name}</span>
+                             <span className="text-gray-500 text-sm font-normal">{trade.symbol}</span>
+                             <span className={`text-[10px] px-1.5 py-0.5 rounded ${isClosed ? 'bg-gray-800 text-gray-400' : 'bg-blue-900/30 text-blue-400'}`}>
+                               {isClosed ? '已平仓' : '持仓中'}
+                             </span>
+                           </div>
+                           <div className="text-xs text-gray-500 mt-1">
+                             买入时间: {new Date(trade.buyTime).toLocaleString()}
+                             {isClosed && trade.sellTime && ` | 卖出时间: ${new Date(trade.sellTime).toLocaleString()}`}
+                           </div>
                          </div>
                          <div className="text-right flex flex-col items-end">
                            <div className="flex items-center space-x-3 mb-1">
-                             <span className="text-xs text-gray-500">当前浮亏/浮盈</span>
+                             <span className="text-xs text-gray-500">{isClosed ? '最终盈亏' : '当前浮亏/浮盈'}</span>
                              <button onClick={() => setPaperTrades(prev => prev.filter(t => t.id !== trade.id))} className="text-xs text-gray-600 hover:text-red-500 transition-colors">删除</button>
                            </div>
                            <div className={`text-xl font-bold font-mono ${pnl >= 0 ? 'text-[var(--color-stock-red)]' : 'text-[var(--color-stock-green)]'}`}>
@@ -967,11 +980,19 @@ export default function App() {
                        </div>
                        <div className="grid grid-cols-2 gap-4 mb-4 text-sm font-mono bg-black p-3 rounded">
                          <div><span className="text-gray-500">买入价格:</span> {trade.buyPrice.toFixed(2)}</div>
-                         <div><span className="text-gray-500">当前价格:</span> {currentPrice.toFixed(2)}</div>
+                         <div><span className="text-gray-500">{isClosed ? '卖出价格:' : '当前价格:'}</span> {finalPrice.toFixed(2)}</div>
                        </div>
-                       <div className="text-sm">
-                         <span className="text-blue-400 font-bold mb-1 block">买入时的 AI 逻辑 / 策略理由：</span>
-                         <p className="text-gray-400 whitespace-pre-wrap bg-blue-950/20 p-3 rounded border border-blue-900/30">{trade.aiLogic}</p>
+                       <div className="text-sm space-y-3">
+                         <div>
+                           <span className="text-blue-400 font-bold mb-1 block">买入逻辑 / 策略理由：</span>
+                           <p className="text-gray-400 whitespace-pre-wrap bg-blue-950/20 p-3 rounded border border-blue-900/30">{trade.aiLogic}</p>
+                         </div>
+                         {isClosed && trade.sellAiLogic && (
+                           <div>
+                             <span className="text-green-400 font-bold mb-1 block">卖出逻辑 / 平仓理由：</span>
+                             <p className="text-gray-400 whitespace-pre-wrap bg-green-950/20 p-3 rounded border border-green-900/30">{trade.sellAiLogic}</p>
+                           </div>
+                         )}
                        </div>
                      </div>
                    );
@@ -1089,24 +1110,44 @@ export default function App() {
             <div className="flex-1 p-4 overflow-auto">
               {!isBossMode ? (
                 <>
-                  <div className="flex justify-between items-center mb-4">
-                    <button 
-                      onClick={() => {
-                        const newTrade: PaperTrade = {
-                          id: Date.now().toString(),
-                          symbol: selectedStock.symbol,
-                          name: selectedStock.name,
-                          buyPrice: selectedStock.price,
-                          buyTime: Date.now(),
-                          aiLogic: aiAnalyses[selectedStock.symbol]?.analysis || '手动盘中发起',
-                        };
-                        setPaperTrades([...paperTrades, newTrade]);
-                        alert('已记录虚拟买入，可在"虚拟交易"面板追踪盈亏');
-                      }}
-                      className="w-full py-2 bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 text-white font-bold rounded-lg shadow-lg shadow-red-500/20 transition-all"
-                    >
-                      记录虚拟买入
-                    </button>
+                  <div className="flex justify-between items-center mb-4 space-x-2">
+                    {(() => {
+                      const activeTrade = paperTrades.find(t => t.symbol === selectedStock.symbol && !t.sellPrice);
+                      return activeTrade ? (
+                        <button 
+                          onClick={() => {
+                            setPaperTrades(prev => prev.map(t => t.id === activeTrade.id ? {
+                              ...t,
+                              sellPrice: selectedStock.price,
+                              sellTime: Date.now(),
+                              sellAiLogic: aiAnalyses[selectedStock.symbol]?.analysis || '手动盘中卖出'
+                            } : t));
+                            alert('已记录虚拟卖出，可在"虚拟交易"面板查看最终盈亏');
+                          }}
+                          className="w-full py-2 bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 text-white font-bold rounded-lg shadow-lg shadow-green-500/20 transition-all"
+                        >
+                          记录虚拟卖出
+                        </button>
+                      ) : (
+                        <button 
+                          onClick={() => {
+                            const newTrade: PaperTrade = {
+                              id: Date.now().toString(),
+                              symbol: selectedStock.symbol,
+                              name: selectedStock.name,
+                              buyPrice: selectedStock.price,
+                              buyTime: Date.now(),
+                              aiLogic: aiAnalyses[selectedStock.symbol]?.analysis || '手动盘中买入',
+                            };
+                            setPaperTrades([...paperTrades, newTrade]);
+                            alert('已记录虚拟买入，可在"虚拟交易"面板追踪盈亏');
+                          }}
+                          className="w-full py-2 bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 text-white font-bold rounded-lg shadow-lg shadow-red-500/20 transition-all"
+                        >
+                          记录虚拟买入
+                        </button>
+                      );
+                    })()}
                   </div>
                   <div className="bg-blue-900/10 border border-blue-900/50 rounded-lg p-3 mb-4">
                     <div className="flex items-center justify-between mb-2">
