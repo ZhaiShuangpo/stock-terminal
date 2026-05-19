@@ -869,20 +869,26 @@ export default function App() {
                 <button onClick={() => setAlertStream([])} className="text-xs text-gray-500 hover:text-white">清空记录</button>
               </div>
               <div className="flex-1 overflow-auto space-y-2">
-                {alertStream.length === 0 ? <div className="flex items-center justify-center h-full text-gray-600">等待盘中异动触发...</div> : alertStream.map((alert, idx) => (
-                  <div key={idx} className="flex items-center space-x-4 bg-gray-900/50 border border-gray-800 p-3 rounded-lg hover:border-gray-700 transition-colors animate-in fade-in slide-in-from-top-2">
-                    <span className="text-gray-500 font-mono text-xs">{alert.time}</span>
-                    <div className="flex items-baseline space-x-2">
-                      <span className="font-bold text-gray-200">{alert.name}</span>
-                      <span className="text-xs text-gray-500">{alert.symbol}</span>
+                {(() => {
+                  const filteredAlerts = alertStream.filter(alert => allSymbols.includes(alert.symbol));
+                  if (filteredAlerts.length === 0) {
+                    return <div className="flex items-center justify-center h-full text-gray-600">等待盘中异动触发...</div>;
+                  }
+                  return filteredAlerts.map((alert, idx) => (
+                    <div key={idx} className="flex items-center space-x-4 bg-gray-900/50 border border-gray-800 p-3 rounded-lg hover:border-gray-700 transition-colors animate-in fade-in slide-in-from-top-2">
+                      <span className="text-gray-500 font-mono text-xs">{alert.time}</span>
+                      <div className="flex items-baseline space-x-2">
+                        <span className="font-bold text-gray-200">{alert.name}</span>
+                        <span className="text-xs text-gray-500">{alert.symbol}</span>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${alert.type === '急速拉升' ? 'bg-red-500/10 text-red-500' : 'bg-green-500/10 text-green-500'}`}>{alert.type}</span>
+                      <span className={`font-mono font-bold ${alert.type === '急速拉升' ? 'text-red-500' : 'text-green-500'}`}>{alert.value}</span>
+                      <div className="flex-1"></div>
+                      <button onClick={() => { const stock = stocks.find(s => s.symbol === alert.symbol); if (stock) { setSelectedStock(stock); setActiveTab('dashboard'); } }}
+                        className="text-xs text-blue-500 hover:underline">查看图表</button>
                     </div>
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${alert.type === '急速拉升' ? 'bg-red-500/10 text-red-500' : 'bg-green-500/10 text-green-500'}`}>{alert.type}</span>
-                    <span className={`font-mono font-bold ${alert.type === '急速拉升' ? 'text-red-500' : 'text-green-500'}`}>{alert.value}</span>
-                    <div className="flex-1"></div>
-                    <button onClick={() => { const stock = stocks.find(s => s.symbol === alert.symbol); if (stock) { setSelectedStock(stock); setActiveTab('dashboard'); } }}
-                      className="text-xs text-blue-500 hover:underline">查看图表</button>
-                  </div>
-                ))}
+                  ));
+                })()}
               </div>
             </div>
           ) : activeTab === 'ai' ? (
