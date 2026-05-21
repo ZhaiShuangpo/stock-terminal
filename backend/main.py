@@ -140,6 +140,9 @@ async def fetch_tencent_data(symbols: List[str]):
                         "changePercent": change_percent,
                         "volume": volume,
                         "amount": amount,
+                        "pe": float(fields[39]) if fields[39] else 0.0,
+                        "pb": float(fields[46]) if fields[46] else 0.0,
+                        "marketCap": float(fields[45]) if fields[45] else 0.0,
                         "trend": list(stock_history[code_prefix])
                     })
             return results, alerts
@@ -333,7 +336,7 @@ async def history_stock(symbol: str, period: str = "day"):
     return {"data": formatted_data}
 
 @app.get("/api/analyze")
-async def analyze_stock(symbol: str, name: str = "", price: str = "", changePercent: str = "", x_gemini_key: str = Header(None)):
+async def analyze_stock(symbol: str, name: str = "", price: str = "", changePercent: str = "", pe: str = "", pb: str = "", marketCap: str = "", x_gemini_key: str = Header(None)):
     if not x_gemini_key:
         raise HTTPException(status_code=401, detail="Gemini API Key is required")
     try:
@@ -343,6 +346,10 @@ async def analyze_stock(symbol: str, name: str = "", price: str = "", changePerc
         current_status = ""
         if price and changePercent:
             current_status = f"该股当前最新价为 {price}，今日涨跌幅为 {changePercent}%。"
+            
+        fundamentals = ""
+        if pe and pb and marketCap:
+            fundamentals = f"\n【核心基本面】：当前市盈率(PE)为 {pe}，市净率(PB)为 {pb}，流通市值为 {marketCap} 亿元。"
 
         # Fetch recent historical data (last 40 days) for AI context to compute indicators
         kline_context = ""
@@ -367,18 +374,18 @@ async def analyze_stock(symbol: str, name: str = "", price: str = "", changePerc
             kline_context = f"\n【近10日量价与指标形态】：\n{kline_text}"
 
         prompt = f"""
-作为拥有15年A股游资与机构操盘经验的顶尖操盘手，请对股票 【{stock_identifier}】 进行极速复盘与推演。
-{current_status}{kline_context}
+作为拥有15年A股长线价值投资与波段趋势跟踪经验的顶尖操盘手，请对股票 【{stock_identifier}】 进行深度复盘与推演。
+{current_status}{fundamentals}{kline_context}
 
-请务必利用你强大的联网搜索能力，检索该股票最新的新闻、公告。结合上述提供的近期K线及均线(MA5/MA20)、MACD走势数据。
-基于真实的新闻、基本面、长短期量价形态及A股市场风格的深刻理解，提供以下高密度干货：
+请务必利用你强大的联网搜索能力，检索该股票最新的新闻、公告和行业研报。
+基于真实的新闻、基本面估值（PE/PB）、长短期量价形态及A股市场风格的深刻理解，提供以下高密度干货：
 
-1. 【资金与技术定性】：结合近十日量价及MACD背离情况，主力是属于洗盘、出货、试盘还是主升浪加速？
-2. 【核心逻辑】：该股最近炒作的核心题材或基本面利好是什么？（一句话点透）
-3. 【关键点位】：结合MA5和MA20均线，给出一个短线的强支撑位和强压力位。
-4. 【操作剧本】：明日及本周若高开/低开应采取的应对预案。
+1. 【基本面与估值诊断】：结合当前的PE、PB和市值，判断该股目前是否处于历史相对底部的击球区？核心护城河或中长线逻辑是什么？
+2. 【资金与技术定性】：结合近十日量价及MACD背离情况，判断中线级别的主力意图（吸筹、洗盘、主升浪还是派发）？
+3. 【关键点位】：结合MA5和MA20均线，给出一个中短线的强支撑位和强压力位。
+4. 【操作剧本】：如果作为长线持仓或大波段操作，未来一周甚至一个月的操作建议是什么？
 
-要求语言极度精炼、犀利，多用A股实战术语（如：连板、反包、弱转强、水下捞、金叉死叉等），绝对不要废话和免责声明。
+要求语言极度精炼、犀利，多用A股实战术语，绝对不要废话和免责声明。
 
 【强制格式要求】
 你必须返回一个严格合法的 JSON 对象，不要包含 markdown 代码块(如 ```json)包装，直接返回 JSON 字符串。格式如下：
@@ -386,7 +393,7 @@ async def analyze_stock(symbol: str, name: str = "", price: str = "", changePerc
   "analysis": "上面要求的1到4点的文本分析，可以包含换行符（注意转义）",
   "support": 14.50,  // (可选，数字类型) 从你的分析中提取的具体强支撑位价格，如果没有明确支撑位请返回 null
   "resistance": 15.80, // (可选，数字类型) 从你的分析中提取的具体强压力位价格，如果没有明确压力位请返回 null
-  "winRate": "B+" // (字符串) 给出胜率评级，必须是 "A" (强烈看多), "B+" (谨慎看多), "B-" (观望), "C" (看空) 之一
+  "winRate": "B+" // (字符串) 给出中长线胜率评级，必须是 "A" (强烈看多), "B+" (谨慎看多), "B-" (观望), "C" (看空) 之一
 }}
 """
         models_to_try = ['gemini-2.5-flash', 'gemini-3-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite']
@@ -573,6 +580,77 @@ async def websocket_endpoint(websocket: WebSocket):
             task.cancel()
     except Exception as e:
         print(f"Connection error: {e}")
+
+@app.post("/api/evaluate_thesis")
+async def evaluate_thesis(payload: dict, x_gemini_key: str = Header(None)):
+    if not x_gemini_key:
+        raise HTTPException(status_code=401, detail="Gemini API Key is required")
+        
+    symbol = payload.get("symbol")
+    name = payload.get("name")
+    thesis = payload.get("thesis")
+    
+    if not symbol or not thesis:
+        raise HTTPException(status_code=400, detail="Symbol and thesis are required")
+
+    try:
+        client = genai.Client(api_key=x_gemini_key)
+        stock_identifier = f"{name}({symbol})" if name else symbol
+        
+        prompt = f"""
+作为一名长线价值投资的守护者，您的任务是对长线持仓股票【{stock_identifier}】的买入逻辑进行“周末体检”和重估。
+
+【用户当初买入的核心逻辑/理由】：
+{thesis}
+
+请利用你的联网搜索能力，检索该股票、其所属行业最近一周的重大新闻、财报披露、以及宏观政策变化。
+基于最新的真实信息，严格、客观地评估用户当初的买入逻辑是否仍然成立：
+
+1. 【逻辑是否被证伪】：当初的预期是否已经实现、正在顺利推进、还是被突发事件彻底破坏？
+2. 【新出现的黑天鹅/催化剂】：近期是否有当初没考虑到的重大风险或超预期利好？
+3. 【长线持仓建议】：基于基本面逻辑的演变，建议“继续坚定持有”、“减仓观望”还是“果断平仓清仓”？
+
+要求语言极度客观、理性，不要安慰用户，如果逻辑已经破产请直接指出风险。
+
+【强制格式要求】
+你必须返回一个严格合法的 JSON 对象，不要包含 markdown 代码块包装，直接返回 JSON 字符串。格式如下：
+{{
+  "evaluation": "上面要求的1到3点的综合评估报告（可含换行符）",
+  "status": "HOLD" // 必须是 "HOLD" (逻辑仍在,建议持有), "WARNING" (逻辑松动,建议减仓/观望), "SELL" (逻辑证伪,建议平仓) 之一
+}}
+"""
+        models_to_try = ['gemini-2.5-flash', 'gemini-3-flash']
+        last_error = None
+        
+        for model_name in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[{"google_search": {}}],
+                    )
+                )
+                import json
+                import re
+                try:
+                    text = response.text.strip()
+                    if text.startswith("```"):
+                        text = re.sub(r"^```(?:json)?\n", "", text)
+                        text = re.sub(r"\n```$", "", text)
+                    res_data = json.loads(text)
+                    return res_data
+                except json.JSONDecodeError:
+                    return {"evaluation": response.text, "status": "WARNING"}
+            except Exception as e:
+                print(f"Model {model_name} failed: {e}")
+                last_error = e
+
+        return {"evaluation": f"逻辑重估失败: 请检查网络或 API Key 状态。最后错误: {str(last_error)}", "status": "WARNING"}
+
+    except Exception as e:
+        print(f"Evaluate thesis error: {e}")
+        return {"evaluation": "系统错误，请重试。", "status": "WARNING"}
 
 if __name__ == "__main__":
     import uvicorn

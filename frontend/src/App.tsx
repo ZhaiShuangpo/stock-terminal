@@ -32,6 +32,9 @@ interface StockData {
   changePercent: number;
   volume: number;
   amount: number;
+  pe?: number;
+  pb?: number;
+  marketCap?: number;
   trend: number[];
 }
 
@@ -52,6 +55,9 @@ interface PaperTrade {
   sellPrice?: number;
   sellTime?: number;
   sellAiLogic?: string;
+  evaluation?: string;
+  evalStatus?: string;
+  isEvaluating?: boolean;
 }
 
 // Sortable Row Component
@@ -817,7 +823,7 @@ export default function App() {
                         sectorStocks.map((stock: any) => (
                           <div key={stock.symbol} onClick={() => {
                             // Optionally add to tracking and open chart
-                            const newStock = { symbol: stock.symbol, code: stock.code, name: stock.name, price: stock.price, high: stock.high, low: stock.low, change: stock.change, changePercent: stock.changePercent, volume: stock.volume, amount: stock.amount, trend: [] } as StockData;
+                            const newStock = { symbol: stock.symbol, code: stock.code, name: stock.name, price: stock.price, high: stock.high, low: stock.low, change: stock.change, changePercent: stock.changePercent, volume: stock.volume, amount: stock.amount, pe: stock.pe, pb: stock.pb, marketCap: stock.marketCap, trend: [] } as StockData;
                             setStocks(prev => prev.some(s => s.symbol === stock.symbol) ? prev : [newStock, ...prev]);
                             setSelectedStock(newStock);
                             setActiveTab('dashboard');
@@ -990,8 +996,44 @@ export default function App() {
                        </div>
                        <div className="text-sm space-y-3">
                          <div>
-                           <span className="text-blue-400 font-bold mb-1 block">买入逻辑 / 策略理由：</span>
+                           <div className="flex items-center justify-between mb-1">
+                             <span className="text-blue-400 font-bold block">买入逻辑 / 策略理由：</span>
+                             {!isClosed && apiKey && (
+                               <button 
+                                 disabled={trade.isEvaluating}
+                                 onClick={async () => {
+                                    setPaperTrades(prev => prev.map(t => t.id === trade.id ? { ...t, isEvaluating: true } : t));
+                                    try {
+                                      const res = await fetch('http://localhost:8000/api/evaluate_thesis', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', 'X-Gemini-Key': apiKey },
+                                        body: JSON.stringify({ symbol: trade.symbol, name: trade.name, thesis: trade.aiLogic })
+                                      });
+                                      const data = await res.json();
+                                      setPaperTrades(prev => prev.map(t => t.id === trade.id ? { ...t, isEvaluating: false, evaluation: data.evaluation, evalStatus: data.status } : t));
+                                    } catch (e) {
+                                      setPaperTrades(prev => prev.map(t => t.id === trade.id ? { ...t, isEvaluating: false, evaluation: '重估请求失败', evalStatus: 'WARNING' } : t));
+                                    }
+                                 }}
+                                 className="text-xs px-2 py-0.5 bg-blue-900/50 hover:bg-blue-800 text-blue-300 rounded transition-colors disabled:opacity-50"
+                               >
+                                 {trade.isEvaluating ? '重估中...' : '💡 逻辑周末体检'}
+                               </button>
+                             )}
+                           </div>
                            <p className="text-gray-400 whitespace-pre-wrap bg-blue-950/20 p-3 rounded border border-blue-900/30">{trade.aiLogic}</p>
+                           
+                           {trade.evaluation && (
+                             <div className="mt-3 bg-gray-950 p-3 rounded border border-gray-800">
+                               <div className="flex items-center space-x-2 mb-2">
+                                 <span className="font-bold text-gray-300">体检报告:</span>
+                                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${trade.evalStatus === 'HOLD' ? 'bg-green-500/20 text-green-400' : trade.evalStatus === 'SELL' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
+                                   {trade.evalStatus}
+                                 </span>
+                               </div>
+                               <p className="text-gray-400 text-xs whitespace-pre-wrap leading-relaxed">{trade.evaluation}</p>
+                             </div>
+                           )}
                          </div>
                          {isClosed && trade.sellAiLogic && (
                            <div>
@@ -1137,13 +1179,15 @@ export default function App() {
                       ) : (
                         <button 
                           onClick={() => {
+                            const customLogic = window.prompt('记录核心买入逻辑/理由（留空则使用当前 AI 分析）：');
+                            if (customLogic === null) return; // cancelled
                             const newTrade: PaperTrade = {
                               id: Date.now().toString(),
                               symbol: selectedStock.symbol,
                               name: selectedStock.name,
                               buyPrice: selectedStock.price,
                               buyTime: Date.now(),
-                              aiLogic: aiAnalyses[selectedStock.symbol]?.analysis || '手动盘中买入',
+                              aiLogic: customLogic.trim() || aiAnalyses[selectedStock.symbol]?.analysis || '手动盘中买入',
                             };
                             setPaperTrades([...paperTrades, newTrade]);
                             alert('已记录虚拟买入，可在"虚拟交易"面板追踪盈亏');
@@ -1164,7 +1208,7 @@ export default function App() {
                         const currentSymbol = selectedStock.symbol;
                         setAiAnalyses(prev => ({ ...prev, [currentSymbol]: { analysis: 'Gemini 思考中...' } }));
                         try {
-                          const res = await fetch(`http://localhost:8000/api/analyze?symbol=${currentSymbol}&name=${encodeURIComponent(selectedStock.name)}&price=${selectedStock.price}&changePercent=${selectedStock.changePercent}`, { headers: { 'X-Gemini-Key': apiKey } });
+                          const res = await fetch(`http://localhost:8000/api/analyze?symbol=${currentSymbol}&name=${encodeURIComponent(selectedStock.name)}&price=${selectedStock.price}&changePercent=${selectedStock.changePercent}&pe=${selectedStock.pe || ''}&pb=${selectedStock.pb || ''}&marketCap=${selectedStock.marketCap || ''}`, { headers: { 'X-Gemini-Key': apiKey } });
                           const data = await res.json(); 
                           setAiAnalyses(prev => ({ ...prev, [currentSymbol]: data.analysis ? data : { analysis: '分析失败，请重试' } }));
                         } catch (e) { 
@@ -1190,6 +1234,15 @@ export default function App() {
                 <div className="flex justify-between"><span className="text-gray-500">昨收</span><span>{(selectedStock.price - selectedStock.change).toFixed(2)}</span></div>
                 <div className="flex justify-between"><span className="text-gray-500">最高</span><span className="text-[var(--color-stock-red)]">{(selectedStock.high || 0).toFixed(2)}</span></div>
                 <div className="flex justify-between"><span className="text-gray-500">最低</span><span className="text-[var(--color-stock-green)]">{(selectedStock.low || 0).toFixed(2)}</span></div>
+                {selectedStock.pe !== undefined && (
+                  <div className="flex justify-between"><span className="text-gray-500">市盈率(PE)</span><span>{selectedStock.pe > 0 ? selectedStock.pe.toFixed(2) : '-'}</span></div>
+                )}
+                {selectedStock.pb !== undefined && (
+                  <div className="flex justify-between"><span className="text-gray-500">市净率(PB)</span><span>{selectedStock.pb > 0 ? selectedStock.pb.toFixed(2) : '-'}</span></div>
+                )}
+                {selectedStock.marketCap !== undefined && (
+                  <div className="flex justify-between col-span-2"><span className="text-gray-500">总市值/流通市值</span><span>{(selectedStock.marketCap || 0).toFixed(2)} 亿</span></div>
+                )}
                 {fundFlow && (
                   <>
                     <div className="flex justify-between">
