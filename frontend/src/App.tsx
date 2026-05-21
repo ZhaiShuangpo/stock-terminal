@@ -179,6 +179,8 @@ export default function App() {
   const [ma5Data, setMa5Data] = useState<any[]>([]);
   const [ma10Data, setMa10Data] = useState<any[]>([]);
   const [ma20Data, setMa20Data] = useState<any[]>([]);
+  const [ma60Data, setMa60Data] = useState<any[]>([]);
+  const [ma120Data, setMa120Data] = useState<any[]>([]);
   const [macdData, setMacdData] = useState<{ dif: any[], dea: any[], histogram: any[] } | null>(null);
   const [markers, setMarkers] = useState<any[]>([]);
   const [marketReview, setMarketReview] = useState<string>('');
@@ -483,9 +485,13 @@ export default function App() {
               setVolumeData(volData);
               const ma5 = calculateMA(rawData, 5);
               const ma20 = calculateMA(rawData, 20);
+              const ma60 = calculateMA(rawData, 60);
+              const ma120 = calculateMA(rawData, 120);
               setMa5Data(ma5);
               setMa10Data(calculateMA(rawData, 10));
               setMa20Data(ma20);
+              setMa60Data(ma60);
+              setMa120Data(ma120);
               const macdObj = calculateMACD(rawData);
               setMacdData(macdObj);
               
@@ -1139,8 +1145,9 @@ export default function App() {
                     ma5Data={chartPeriod !== 'intraday' ? ma5Data : undefined}
                     ma10Data={chartPeriod !== 'intraday' ? ma10Data : undefined}
                     ma20Data={chartPeriod !== 'intraday' ? ma20Data : undefined}
-                    macdData={chartPeriod !== 'intraday' && macdData ? macdData : undefined}
-                    supportPrice={aiAnalyses[selectedStock.symbol]?.support ?? undefined}
+                    ma60Data={chartPeriod !== 'intraday' ? ma60Data : undefined}
+                    ma120Data={chartPeriod !== 'intraday' ? ma120Data : undefined}
+                    macdData={chartPeriod !== 'intraday' && macdData ? macdData : undefined}                    supportPrice={aiAnalyses[selectedStock.symbol]?.support ?? undefined}
                     resistancePrice={aiAnalyses[selectedStock.symbol]?.resistance ?? undefined}
                     colors={{
                       backgroundColor: 'transparent',
@@ -1199,6 +1206,27 @@ export default function App() {
                       );
                     })()}
                   </div>
+                  {(() => {
+                     let warningMessage = '';
+                     const support = aiAnalyses[selectedStock.symbol]?.support;
+                     if (support && selectedStock.price < support) {
+                        warningMessage = `⚠️【长线破位预警】当前价格已跌破 AI 强支撑防守线 (${support.toFixed(2)})！`;
+                     } else if (ma60Data && ma60Data.length > 0) {
+                        const lastMa60 = ma60Data[ma60Data.length - 1].value;
+                        if (selectedStock.price < lastMa60) {
+                           warningMessage = `⚠️【牛熊破位预警】当前价格已跌破 60 日均线生命线 (${lastMa60.toFixed(2)})！`;
+                        }
+                     }
+                     
+                     if (warningMessage) {
+                        return (
+                           <div className="mb-4 p-3 bg-red-950/50 border border-red-900 rounded-lg flex items-center space-x-3 animate-pulse">
+                              <span className="text-red-500 font-bold">{warningMessage}</span>
+                           </div>
+                        );
+                     }
+                     return null;
+                  })()}
                   <div className="bg-blue-900/10 border border-blue-900/50 rounded-lg p-3 mb-4">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-blue-400 font-medium">✨ Gemini AI 异动分析</span>

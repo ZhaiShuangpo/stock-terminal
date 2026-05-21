@@ -12,6 +12,8 @@ interface ChartProps {
   ma5Data?: any[];
   ma10Data?: any[];
   ma20Data?: any[];
+  ma60Data?: any[];
+  ma120Data?: any[];
   macdData?: { dif: any[]; dea: any[]; histogram: any[] };
   supportPrice?: number;
   resistancePrice?: number;
@@ -36,6 +38,8 @@ export const Chart = ({
   ma5Data,
   ma10Data,
   ma20Data,
+  ma60Data,
+  ma120Data,
   macdData,
   supportPrice,
   resistancePrice,
@@ -57,6 +61,8 @@ export const Chart = ({
   const ma5SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const ma10SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const ma20SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const ma60SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const ma120SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdDifRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdDeaRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
@@ -136,6 +142,8 @@ export const Chart = ({
       ma5SeriesRef.current = chart.addSeries(LineSeries, { color: '#E1BEE7', lineWidth: 1, crosshairMarkerVisible: false, priceLineVisible: false, lastValueVisible: false });
       ma10SeriesRef.current = chart.addSeries(LineSeries, { color: '#FFB74D', lineWidth: 1, crosshairMarkerVisible: false, priceLineVisible: false, lastValueVisible: false });
       ma20SeriesRef.current = chart.addSeries(LineSeries, { color: '#81D4FA', lineWidth: 1, crosshairMarkerVisible: false, priceLineVisible: false, lastValueVisible: false });
+      ma60SeriesRef.current = chart.addSeries(LineSeries, { color: '#BCAAA4', lineWidth: 1, crosshairMarkerVisible: false, priceLineVisible: false, lastValueVisible: false });
+      ma120SeriesRef.current = chart.addSeries(LineSeries, { color: '#80CBC4', lineWidth: 1, crosshairMarkerVisible: false, priceLineVisible: false, lastValueVisible: false });
 
       // Initialize Volume
       volumeSeriesRef.current = chart.addSeries(HistogramSeries, {
@@ -361,6 +369,8 @@ export const Chart = ({
       if (ma5SeriesRef.current && ma5Data) ma5SeriesRef.current.setData(ma5Data);
       if (ma10SeriesRef.current && ma10Data) ma10SeriesRef.current.setData(ma10Data);
       if (ma20SeriesRef.current && ma20Data) ma20SeriesRef.current.setData(ma20Data);
+      if (ma60SeriesRef.current && ma60Data) ma60SeriesRef.current.setData(ma60Data);
+      if (ma120SeriesRef.current && ma120Data) ma120SeriesRef.current.setData(ma120Data);
       if (volumeSeriesRef.current && volumeData) volumeSeriesRef.current.setData(volumeData);
       if (macdData && macdData.dif && macdData.dea && macdData.histogram) {
         if (macdDifRef.current) macdDifRef.current.setData(macdData.dif);
