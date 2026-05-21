@@ -196,7 +196,15 @@ export default function App() {
 
   const [paperTrades, setPaperTrades] = useState<PaperTrade[]>(() => {
     const saved = localStorage.getItem('paper_trades');
-    return saved ? JSON.parse(saved) : [];
+    if (saved) {
+       try {
+          const parsed = JSON.parse(saved);
+          return parsed.map((t: PaperTrade) => ({ ...t, isEvaluating: false }));
+       } catch (e) {
+          return [];
+       }
+    }
+    return [];
   });
 
   useEffect(() => {
