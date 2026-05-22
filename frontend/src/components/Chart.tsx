@@ -69,6 +69,15 @@ export const Chart = ({
   const markersPrimitiveRef = useRef<any>(null);
   const supportLineRef = useRef<any>(null);
   const resistanceLineRef = useRef<any>(null);
+  const vpContainerRef = useRef<HTMLDivElement | null>(null);
+  const updateVpRef = useRef<() => void>(() => {});
+  const dataRef = useRef(data);
+  const volumeDataRef = useRef(volumeData);
+
+  useEffect(() => {
+    dataRef.current = data;
+    volumeDataRef.current = volumeData;
+  }, [data, volumeData]);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -216,7 +225,103 @@ export const Chart = ({
     tooltip.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.5)';
     chartContainerRef.current.appendChild(tooltip);
 
+    const vpContainer = document.createElement('div');
+    vpContainer.style.position = 'absolute';
+    vpContainer.style.top = '0';
+    vpContainer.style.bottom = '0';
+    vpContainer.style.right = '0';
+    vpContainer.style.width = '100%';
+    vpContainer.style.pointerEvents = 'none';
+    vpContainer.style.zIndex = '5';
+    vpContainer.style.overflow = 'hidden';
+    chartContainerRef.current.appendChild(vpContainer);
+    vpContainerRef.current = vpContainer;
+
+    const updateVolumeProfile = () => {
+      if (type !== 'candlestick' || !seriesRef.current || !dataRef.current || !volumeDataRef.current || dataRef.current.length === 0) {
+        vpContainer.style.display = 'none';
+        return;
+      }
+      vpContainer.style.display = 'block';
+
+      const visibleLogicalRange = chart.timeScale().getVisibleLogicalRange();
+      if (!visibleLogicalRange) return;
+
+      const startIndex = Math.max(0, Math.floor(visibleLogicalRange.from));
+      const endIndex = Math.min(dataRef.current.length - 1, Math.ceil(visibleLogicalRange.to));
+      
+      if (startIndex >= endIndex) return;
+
+      let minP = Infinity;
+      let maxP = -Infinity;
+      for (let i = startIndex; i <= endIndex; i++) {
+         const d = dataRef.current[i];
+         if (d.low < minP) minP = d.low;
+         if (d.high > maxP) maxP = d.high;
+      }
+
+      if (minP === Infinity || maxP === -Infinity) return;
+
+      const BINS = 50;
+      const binSize = (maxP - minP) / BINS;
+      if (binSize === 0) return;
+
+      const bins = new Array(BINS).fill(0);
+      for (let i = startIndex; i <= endIndex; i++) {
+        const d = dataRef.current[i];
+        const v = volumeDataRef.current[i]?.value || 0;
+        const typPrice = (d.high + d.low + d.close) / 3;
+        let binIdx = Math.floor((typPrice - minP) / binSize);
+        if (binIdx >= BINS) binIdx = BINS - 1;
+        if (binIdx < 0) binIdx = 0;
+        bins[binIdx] += v;
+      }
+
+      let maxBinVol = Math.max(...bins);
+      if (maxBinVol === 0) maxBinVol = 1;
+
+      let html = '';
+      const priceScaleW = 55; // right price scale width
+      
+      for (let i = 0; i < BINS; i++) {
+        const binVol = bins[i];
+        if (binVol === 0) continue;
+        const priceCenter = minP + (i + 0.5) * binSize;
+        
+        // Lightweight charts coordinate calculation
+        const yTop = seriesRef.current.priceToCoordinate(priceCenter + binSize/2);
+        const yBottom = seriesRef.current.priceToCoordinate(priceCenter - binSize/2);
+        
+        if (yTop === null || yBottom === null) continue;
+        
+        const h = Math.abs(yBottom - yTop);
+        const w = (binVol / maxBinVol) * 120; // max width 120px
+        
+        // Ensure volume profile stays above the MACD/Volume panes
+        // Those panes take up the bottom ~35% of the chart based on scaleMargins
+        if (yTop > chartContainerRef.current!.clientHeight * 0.65) continue;
+
+        html += `<div style="
+          position: absolute;
+          right: ${priceScaleW}px;
+          top: ${Math.min(yTop, yBottom)}px;
+          height: ${Math.max(1, h)}px;
+          width: ${w}px;
+          background-color: rgba(41, 98, 255, 0.15);
+          border-right: 2px solid rgba(41, 98, 255, 0.8);
+          border-top: 1px solid rgba(41, 98, 255, 0.1);
+          border-bottom: 1px solid rgba(41, 98, 255, 0.1);
+          box-sizing: border-box;
+          z-index: 5;
+        "></div>`;
+      }
+      vpContainer.innerHTML = html;
+    };
+
+    chart.timeScale().subscribeVisibleLogicalRangeChange(updateVolumeProfile);
+
     chart.subscribeCrosshairMove((param) => {
+      updateVolumeProfile();
       if (
         param.point === undefined ||
         !param.time ||
@@ -306,6 +411,7 @@ export const Chart = ({
       window.removeEventListener('resize', handleResize);
       chart.remove();
       tooltip.remove();
+      vpContainer.remove();
       supportLineRef.current = null;
       resistanceLineRef.current = null;
       markersPrimitiveRef.current = null;
@@ -377,8 +483,10 @@ export const Chart = ({
         if (macdDeaRef.current) macdDeaRef.current.setData(macdData.dea);
         if (macdHistRef.current) macdHistRef.current.setData(macdData.histogram);
       }
+      setTimeout(() => updateVpRef.current(), 50);
     }
   }, [data, vwapData, markers, type, ma5Data, ma10Data, ma20Data, volumeData, macdData, supportPrice, resistancePrice]);
 
   return <div ref={chartContainerRef} className="w-full h-full relative" />;
 };
+
