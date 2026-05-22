@@ -26,6 +26,8 @@ app.add_middleware(
 # Global store for trend data and previous prices for anomaly detection
 stock_history: Dict[str, List[float]] = {}
 prev_prices: Dict[str, float] = {}
+prev_amounts: Dict[str, float] = {}
+stock_states: Dict[str, dict] = {}
 
 import json
 
@@ -112,13 +114,79 @@ async def fetch_tencent_data(symbols: List[str]):
                     
                     change = float(fields[31])
                     change_percent = float(fields[32])
+                    limit_up_price = float(fields[47]) if fields[47] else 0
+                    limit_down_price = float(fields[48]) if fields[48] else 0
                     
-                    # Anomaly Detection (Simple Jump Detection)
+                    if code_prefix not in stock_states:
+                        stock_states[code_prefix] = {"is_zt": False, "is_dt": False}
+                    state = stock_states[code_prefix]
+                    
+                    # 1. Anomaly Detection (Limit Up / Down & Broken Board)
+                    if limit_up_price > 0 and price >= limit_up_price:
+                        buy1_price = float(fields[9])
+                        buy1_vol = float(fields[10]) # in hands (100 shares)
+                        if buy1_price >= limit_up_price and buy1_vol > 0:
+                            seal_amount = (buy1_vol * 100 * buy1_price) / 100000000 # in 亿
+                            if not state["is_zt"]:
+                                alerts.append({
+                                    "time": time.strftime("%H:%M:%S"),
+                                    "symbol": code_prefix, "name": name,
+                                    "type": "封死涨停", "value": f"封单 {seal_amount:.1f}亿"
+                                })
+                                state["is_zt"] = True
+                    else:
+                        if state["is_zt"]:
+                            alerts.append({
+                                "time": time.strftime("%H:%M:%S"),
+                                "symbol": code_prefix, "name": name,
+                                "type": "涨停炸板", "value": "封单撤销/被砸"
+                            })
+                            state["is_zt"] = False
+
+                    if limit_down_price > 0 and price <= limit_down_price:
+                        sell1_price = float(fields[19])
+                        sell1_vol = float(fields[20])
+                        if sell1_price <= limit_down_price and sell1_vol > 0:
+                            seal_amount = (sell1_vol * 100 * sell1_price) / 100000000
+                            if not state["is_dt"]:
+                                alerts.append({
+                                    "time": time.strftime("%H:%M:%S"),
+                                    "symbol": code_prefix, "name": name,
+                                    "type": "封死跌停", "value": f"封单 {seal_amount:.1f}亿"
+                                })
+                                state["is_dt"] = True
+                    else:
+                        if state["is_dt"]:
+                            alerts.append({
+                                "time": time.strftime("%H:%M:%S"),
+                                "symbol": code_prefix, "name": name,
+                                "type": "跌停撬开", "value": "巨单撬板"
+                            })
+                            state["is_dt"] = False
+
+                    # 2. Large Order Tracking (千万大单)
+                    if code_prefix in prev_amounts:
+                        delta_amount = amount - prev_amounts[code_prefix]
+                        if delta_amount >= 10000000: # 10 Million RMB
+                            if price > prev_prices.get(code_prefix, price):
+                                alerts.append({
+                                    "time": time.strftime("%H:%M:%S"),
+                                    "symbol": code_prefix, "name": name,
+                                    "type": "大单扫货", "value": f"{delta_amount/10000:.0f}万"
+                                })
+                            elif price < prev_prices.get(code_prefix, price):
+                                alerts.append({
+                                    "time": time.strftime("%H:%M:%S"),
+                                    "symbol": code_prefix, "name": name,
+                                    "type": "大单砸盘", "value": f"{delta_amount/10000:.0f}万"
+                                })
+
+                    # 3. Simple Jump Detection
                     if code_prefix in prev_prices:
                         old_p = prev_prices[code_prefix]
                         if old_p > 0:
                             jump = (price - old_p) / old_p * 100
-                            if abs(jump) >= 0.5: # 0.5% jump in 3 seconds is significant
+                            if abs(jump) >= 0.8: # 0.8% jump in 3 seconds is very strong
                                 alerts.append({
                                     "time": time.strftime("%H:%M:%S"),
                                     "symbol": code_prefix,
@@ -126,7 +194,9 @@ async def fetch_tencent_data(symbols: List[str]):
                                     "type": "急速拉升" if jump > 0 else "快速跳水",
                                     "value": f"{'+' if jump > 0 else ''}{jump:.2f}%"
                                 })
+
                     prev_prices[code_prefix] = price
+                    prev_amounts[code_prefix] = amount
 
                     if code_prefix not in stock_history:
                         stock_history[code_prefix] = []

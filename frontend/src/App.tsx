@@ -989,8 +989,8 @@ export default function App() {
                         <span className="font-bold text-gray-200">{alert.name}</span>
                         <span className="text-xs text-gray-500">{alert.symbol}</span>
                       </div>
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${alert.type === '急速拉升' ? 'bg-red-500/10 text-red-500' : 'bg-green-500/10 text-green-500'}`}>{alert.type}</span>
-                      <span className={`font-mono font-bold ${alert.type === '急速拉升' ? 'text-red-500' : 'text-green-500'}`}>{alert.value}</span>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${['急速拉升', '封死涨停', '大单扫货', '跌停撬开'].includes(alert.type) ? 'bg-red-500/10 text-red-500' : 'bg-green-500/10 text-green-500'}`}>{alert.type}</span>
+                      <span className={`font-mono font-bold ${['急速拉升', '封死涨停', '大单扫货', '跌停撬开'].includes(alert.type) ? 'text-red-500' : 'text-green-500'}`}>{alert.value}</span>
                       <div className="flex-1"></div>
                       <button onClick={() => { const stock = stocks.find(s => s.symbol === alert.symbol); if (stock) { setSelectedStock(stock); setActiveTab('dashboard'); } }}
                         className="text-xs text-blue-500 hover:underline">查看图表</button>
