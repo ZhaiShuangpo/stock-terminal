@@ -729,7 +729,7 @@ async def evaluate_thesis(payload: dict, x_gemini_key: str = Header(None)):
         return {"evaluation": "系统错误，请重试。", "status": "WARNING"}
 
 @app.get("/api/market_sentiment")
-async def get_market_sentiment():
+def get_market_sentiment():
     try:
         import akshare as ak
         import pandas as pd

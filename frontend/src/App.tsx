@@ -315,7 +315,7 @@ export default function App() {
       try {
         const res = await fetch('http://localhost:8000/api/market_sentiment');
         const data = await res.json();
-        if (isMounted && data) {
+        if (isMounted && data && data.up !== undefined) {
           setSentiment(data);
         }
       } catch (e) {
