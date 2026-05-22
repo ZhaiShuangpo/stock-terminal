@@ -193,6 +193,7 @@ export default function App() {
   const [sectorStocks, setSectorStocks] = useState<any[]>([]);
   const [alertStream, setAlertStream] = useState<any[]>([]);
   const [fundFlow, setFundFlow] = useState<any>(null);
+  const [sentiment, setSentiment] = useState<any>(null);
 
   const [paperTrades, setPaperTrades] = useState<PaperTrade[]>(() => {
     const saved = localStorage.getItem('paper_trades');
@@ -306,6 +307,28 @@ export default function App() {
     }, 300);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  useEffect(() => {
+    if (activeTab !== 'sectors') return;
+    let isMounted = true;
+    const fetchSentiment = async () => {
+      try {
+        const res = await fetch('http://localhost:8000/api/market_sentiment');
+        const data = await res.json();
+        if (isMounted && data) {
+          setSentiment(data);
+        }
+      } catch (e) {
+        console.error("Failed to fetch sentiment", e);
+      }
+    };
+    fetchSentiment();
+    const interval = setInterval(fetchSentiment, 60000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [activeTab]);
 
   useEffect(() => {
     let connectTime: number;
@@ -862,6 +885,71 @@ export default function App() {
                     <h2 className="text-xl font-bold">板块涨跌幅排行榜</h2>
                     <div className="text-xs text-gray-500">数据实时更新</div>
                   </div>
+                  
+                  {sentiment && (
+                    <div className="mb-6 grid grid-cols-2 lg:grid-cols-4 gap-4">
+                      {/* 1. 涨跌分布 */}
+                      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+                        <div className="text-xs text-gray-500 mb-2">全市场涨跌分布</div>
+                        <div className="flex justify-between items-end mb-2">
+                           <div className="text-center">
+                              <div className="text-xl font-bold text-[var(--color-stock-red)]">{sentiment.up}</div>
+                              <div className="text-[10px] text-gray-500">上涨</div>
+                           </div>
+                           <div className="text-center">
+                              <div className="text-xl font-bold text-[var(--color-stock-green)]">{sentiment.down}</div>
+                              <div className="text-[10px] text-gray-500">下跌</div>
+                           </div>
+                           <div className="text-center">
+                              <div className="text-xl font-bold text-gray-400">{sentiment.flat}</div>
+                              <div className="text-[10px] text-gray-500">平盘</div>
+                           </div>
+                        </div>
+                        <div className="w-full h-1.5 flex rounded-full overflow-hidden opacity-80">
+                           <div className="bg-[var(--color-stock-red)]" style={{ width: `${(sentiment.up / (sentiment.up + sentiment.down + sentiment.flat)) * 100}%` }}></div>
+                           <div className="bg-gray-500" style={{ width: `${(sentiment.flat / (sentiment.up + sentiment.down + sentiment.flat)) * 100}%` }}></div>
+                           <div className="bg-[var(--color-stock-green)]" style={{ width: `${(sentiment.down / (sentiment.up + sentiment.down + sentiment.flat)) * 100}%` }}></div>
+                        </div>
+                      </div>
+
+                      {/* 2. 涨跌停与连板表现 */}
+                      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col justify-between">
+                        <div className="text-xs text-gray-500 mb-1">赚钱效应指标</div>
+                        <div className="flex justify-between items-center">
+                           <span className="text-gray-400 text-sm">今日涨停 / 跌停</span>
+                           <span className="font-bold font-mono text-base"><span className="text-[var(--color-stock-red)]">{sentiment.limitUp}</span> <span className="text-gray-600">/</span> <span className="text-[var(--color-stock-green)]">{sentiment.limitDown}</span></span>
+                        </div>
+                        <div className="flex justify-between items-center mt-2 pt-2 border-t border-gray-800/50">
+                           <span className="text-gray-400 text-sm">昨日涨停今日收益</span>
+                           <span className={`font-bold font-mono text-base ${getColorClass(sentiment.prevZtAvg)}`}>{sentiment.prevZtAvg > 0 ? '+' : ''}{sentiment.prevZtAvg}%</span>
+                        </div>
+                      </div>
+
+                      {/* 3. 两市成交量 */}
+                      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col justify-between">
+                        <div className="text-xs text-gray-500 mb-1">实时两市成交额</div>
+                        <div className="text-2xl font-bold font-mono text-blue-400 mt-1">{sentiment.totalVolume} <span className="text-xs text-gray-500 font-normal">亿</span></div>
+                        <div className="text-xs text-gray-400 mt-2 flex items-center space-x-2">
+                           <span>由于接口限制，暂不提供缩放量对比</span>
+                        </div>
+                      </div>
+
+                      {/* 4. 连板天梯 */}
+                      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+                        <div className="text-xs text-gray-500 mb-2">连板天梯图</div>
+                        <div className="flex space-x-1 h-12 items-end">
+                           {Object.entries(sentiment.ladder || {}).sort((a, b) => Number(b[0]) - Number(a[0])).map(([boards, count]: [string, any]) => (
+                             <div key={boards} className="flex-1 flex flex-col items-center justify-end group relative">
+                               <div className="absolute -top-6 bg-gray-800 text-[10px] px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">{count}只</div>
+                               <div className="w-full bg-red-500/80 rounded-t-sm hover:bg-red-400 transition-colors" style={{ height: `${Math.max(10, (count / sentiment.limitUp) * 100)}%` }}></div>
+                               <div className="text-[10px] text-gray-400 mt-1">{boards}板</div>
+                             </div>
+                           ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex-1 overflow-auto">
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-10">
                       {sectors.length === 0 ? (

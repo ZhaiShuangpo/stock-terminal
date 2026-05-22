@@ -6,6 +6,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, List
 from google import genai
 from google.genai import types
+import os
+
+# Unset proxies to prevent akshare connection issues
+for k in ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
+    if k in os.environ:
+        del os.environ[k]
 
 app = FastAPI()
 
@@ -651,6 +657,59 @@ async def evaluate_thesis(payload: dict, x_gemini_key: str = Header(None)):
     except Exception as e:
         print(f"Evaluate thesis error: {e}")
         return {"evaluation": "系统错误，请重试。", "status": "WARNING"}
+
+@app.get("/api/market_sentiment")
+async def get_market_sentiment():
+    try:
+        import akshare as ak
+        import pandas as pd
+        from datetime import datetime
+        
+        date_str = datetime.now().strftime('%Y%m%d')
+        
+        # 1. Total Volume & Up/Down Counts
+        spot_df = ak.stock_zh_a_spot()
+        spot_df['changepercent'] = pd.to_numeric(spot_df['涨跌幅'], errors='coerce').fillna(0)
+        spot_df['amount'] = pd.to_numeric(spot_df['成交额'], errors='coerce').fillna(0)
+        
+        up = len(spot_df[spot_df['changepercent'] > 0])
+        down = len(spot_df[spot_df['changepercent'] < 0])
+        flat = len(spot_df[spot_df['changepercent'] == 0])
+        limit_up = len(spot_df[spot_df['changepercent'] >= 9.8])
+        limit_down = len(spot_df[spot_df['changepercent'] <= -9.8])
+        total_amount = spot_df['amount'].sum() / 100000000 # in billions (亿)
+        
+        # 2. Limit Up Ladder & Yesterday's Performance
+        ladder = {}
+        try:
+            zt_df = ak.stock_zt_pool_em(date=date_str)
+            limit_up = len(zt_df) # Use more accurate pool size if available
+            counts = zt_df['连板数'].value_counts().to_dict()
+            ladder = {str(k): int(v) for k, v in counts.items()}
+        except Exception as e:
+            print("ZT pool error:", e)
+            
+        prev_zt_avg = 0.0
+        try:
+            prev_zt_df = ak.stock_zt_pool_previous_em(date=date_str)
+            if len(prev_zt_df) > 0 and '涨跌幅' in prev_zt_df.columns:
+                prev_zt_avg = float(prev_zt_df['涨跌幅'].mean())
+        except Exception as e:
+            print("Prev ZT pool error:", e)
+            
+        return {
+            "up": up,
+            "down": down,
+            "flat": flat,
+            "limitUp": limit_up,
+            "limitDown": limit_down,
+            "totalVolume": round(total_amount, 2),
+            "ladder": ladder,
+            "prevZtAvg": round(prev_zt_avg, 2)
+        }
+    except Exception as e:
+        print(f"Market sentiment error: {e}")
+        return {}
 
 if __name__ == "__main__":
     import uvicorn
