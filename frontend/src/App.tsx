@@ -863,7 +863,6 @@ export default function App() {
                             const newStock = { symbol: stock.symbol, code: stock.code, name: stock.name, price: stock.price, high: stock.high, low: stock.low, change: stock.change, changePercent: stock.changePercent, volume: stock.volume, amount: stock.amount, pe: stock.pe, pb: stock.pb, marketCap: stock.marketCap, trend: [] } as StockData;
                             setStocks(prev => prev.some(s => s.symbol === stock.symbol) ? prev : [newStock, ...prev]);
                             setSelectedStock(newStock);
-                            setActiveTab('dashboard');
                           }} className="bg-gray-900 border border-gray-800 rounded-lg p-3 flex justify-between items-center hover:border-gray-600 transition-colors cursor-pointer group">
                             <div>
                               <div className="text-gray-200 font-bold group-hover:text-white transition-colors">{stock.name}</div>
