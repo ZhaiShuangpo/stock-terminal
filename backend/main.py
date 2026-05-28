@@ -695,7 +695,7 @@ async def evaluate_thesis(payload: dict, x_gemini_key: str = Header(None)):
   "status": "HOLD" // 必须是 "HOLD" (逻辑仍在,建议持有), "WARNING" (逻辑松动,建议减仓/观望), "SELL" (逻辑证伪,建议平仓) 之一
 }}
 """
-        models_to_try = ['gemini-2.5-flash', 'gemini-3-flash']
+        models_to_try = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-3-flash']
         last_error = None
         
         for model_name in models_to_try:
@@ -784,3 +784,4 @@ def get_market_sentiment():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+ uvicorn.run(app, host="0.0.0.0", port=8000)
