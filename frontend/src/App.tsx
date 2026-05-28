@@ -60,6 +60,80 @@ interface PaperTrade {
   isEvaluating?: boolean;
 }
 
+// Sortable Group Component
+interface SortableGroupProps {
+  group: Group;
+  isActive: boolean;
+  isBossMode: boolean;
+  editingGroupId: string | null;
+  editingGroupName: string;
+  onClick: () => void;
+  onEditStart: (id: string, name: string) => void;
+  onEditChange: (val: string) => void;
+  onEditBlur: (id: string, val: string) => void;
+  onEditKeyDown: (e: React.KeyboardEvent, id: string, val: string) => void;
+  onDelete: (id: string) => void;
+}
+
+const SortableGroup = ({
+  group, isActive, isBossMode, editingGroupId, editingGroupName,
+  onClick, onEditStart, onEditChange, onEditBlur, onEditKeyDown, onDelete
+}: SortableGroupProps) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: group.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : 0,
+    position: 'relative' as const,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div 
+      ref={setNodeRef}
+      style={style}
+      className={`flex items-center justify-between px-2 py-2 rounded-md text-left transition-colors group/item ${isActive ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'}`}
+    >
+      {!isBossMode && group.id !== 'all' && (
+        <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing text-gray-700 hover:text-gray-400 mr-1 opacity-0 group-hover/item:opacity-100 transition-opacity">
+          <GripVertical className="w-3 h-3" />
+        </div>
+      )}
+      {editingGroupId === group.id && !isBossMode ? (
+        <input 
+          type="text" 
+          value={editingGroupName} 
+          onChange={(e) => onEditChange(e.target.value)}
+          onBlur={() => onEditBlur(group.id, editingGroupName)}
+          onKeyDown={(e) => onEditKeyDown(e, group.id, editingGroupName)}
+          autoFocus
+          className="bg-black text-white px-1 py-0.5 text-xs rounded border border-blue-500 w-24 outline-none flex-1"
+        />
+      ) : (
+        <div className="flex-1 flex items-center justify-between truncate cursor-pointer" onClick={onClick}>
+          <span className="truncate">{isBossMode ? group.bossName : group.name}</span>
+          <span className="text-xs bg-gray-900 px-1.5 rounded text-gray-500 ml-2">{group.symbols.length}</span>
+        </div>
+      )}
+      
+      {!isBossMode && group.id !== 'all' && editingGroupId !== group.id && (
+         <div className="hidden group-hover/item:flex items-center space-x-1 ml-2">
+            <button onClick={(e) => { e.stopPropagation(); onEditStart(group.id, group.name); }} className="text-gray-500 hover:text-blue-400 text-xs">✎</button>
+            <button onClick={(e) => { e.stopPropagation(); onDelete(group.id); }} className="text-gray-500 hover:text-red-400 text-xs">×</button>
+         </div>
+      )}
+    </div>
+  );
+};
+
 // Sortable Row Component
 interface SortableRowProps {
   stock: StockData;
@@ -656,6 +730,20 @@ export default function App() {
     }
   };
 
+  const handleGroupDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setGroups((prevGroups) => {
+        const oldIndex = prevGroups.findIndex(g => g.id === active.id);
+        const newIndex = prevGroups.findIndex(g => g.id === over.id);
+        
+        // Prevent moving 'all' group from index 0 if we decide to keep it pinned
+        // But for now let's just use arrayMove on everything
+        return arrayMove(prevGroups, oldIndex, newIndex);
+      });
+    }
+  };
+
   const handleGenerateReview = async () => {
     if (!apiKey) {
       setShowSettings(true);
@@ -761,33 +849,34 @@ export default function App() {
               )}
             </div>
             <div className="flex flex-col space-y-0.5 px-2 flex-1 overflow-auto">
-              {groups.map((group) => (
-                <div key={group.id} className={`flex items-center justify-between px-3 py-2 rounded-md text-left transition-colors group ${activeGroupId === group.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'}`}>
-                  {editingGroupId === group.id && !isBossMode ? (
-                    <input 
-                      type="text" 
-                      value={editingGroupName} 
-                      onChange={(e) => setEditingGroupName(e.target.value)}
-                      onBlur={() => handleUpdateGroupName(group.id, editingGroupName)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleUpdateGroupName(group.id, editingGroupName)}
-                      autoFocus
-                      className="bg-black text-white px-1 py-0.5 text-xs rounded border border-blue-500 w-24 outline-none"
+              <DndContext 
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleGroupDragEnd}
+                modifiers={[restrictToVerticalAxis]}
+              >
+                <SortableContext 
+                  items={groups.map(g => g.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  {groups.map((group) => (
+                    <SortableGroup 
+                      key={group.id}
+                      group={group}
+                      isActive={activeGroupId === group.id}
+                      isBossMode={isBossMode}
+                      editingGroupId={editingGroupId}
+                      editingGroupName={editingGroupName}
+                      onClick={() => setActiveGroupId(group.id)}
+                      onEditStart={(id, name) => { setEditingGroupId(id); setEditingGroupName(name); }}
+                      onEditChange={(val) => setEditingGroupName(val)}
+                      onEditBlur={(id, val) => handleUpdateGroupName(id, val)}
+                      onEditKeyDown={(e, id, val) => e.key === 'Enter' && handleUpdateGroupName(id, val)}
+                      onDelete={handleDeleteGroup}
                     />
-                  ) : (
-                    <div className="flex-1 flex items-center justify-between truncate cursor-pointer" onClick={() => setActiveGroupId(group.id)}>
-                      <span className="truncate">{isBossMode ? group.bossName : group.name}</span>
-                      <span className="text-xs bg-gray-900 px-1.5 rounded text-gray-500 ml-2">{group.symbols.length}</span>
-                    </div>
-                  )}
-                  
-                  {!isBossMode && group.id !== 'all' && editingGroupId !== group.id && (
-                     <div className="hidden group-hover:flex items-center space-x-1 ml-2">
-                        <button onClick={() => { setEditingGroupId(group.id); setEditingGroupName(group.name); }} className="text-gray-500 hover:text-blue-400 text-xs">✎</button>
-                        <button onClick={() => handleDeleteGroup(group.id)} className="text-gray-500 hover:text-red-400 text-xs">×</button>
-                     </div>
-                  )}
-                </div>
-              ))}
+                  ))}
+                </SortableContext>
+              </DndContext>
             </div>
           </aside>
         )}
