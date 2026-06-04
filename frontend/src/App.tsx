@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useRef } from 'react';
 import { Activity, Settings, Search, X, GripVertical } from 'lucide-react';
 import { Chart } from './components/Chart';
 import { calculateMA, calculateMACD } from './utils/indicators';
+import { SECTOR_ETF_MAP } from './utils/etfMapping';
 
 // Dnd-kit imports
 import {
@@ -941,6 +942,39 @@ export default function App() {
                       {selectedSector.changePercent > 0 ? '+' : ''}{selectedSector.changePercent.toFixed(2)}%
                     </div>
                   </div>
+                  
+                  {/* Sector ETF Mapping Banner */}
+                  {(() => {
+                    const mappedEtf = SECTOR_ETF_MAP[selectedSector.name];
+                    if (mappedEtf) {
+                      return (
+                        <div className="mb-4 bg-gradient-to-r from-blue-900/30 to-indigo-900/30 border border-blue-800/50 rounded-lg p-4 flex items-center justify-between shadow-lg">
+                          <div>
+                            <div className="text-blue-400 font-bold mb-1 flex items-center space-x-2">
+                              <span>🛡️ 稳健长线优选：行业核心 ETF</span>
+                              <span className="text-[10px] bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded border border-blue-500/30">规避个股黑天鹅</span>
+                            </div>
+                            <div className="text-gray-300 text-sm">看好【{selectedSector.name}】板块轮动，但不想承担单只股票爆雷风险？推荐直接配置行业 ETF。</div>
+                          </div>
+                          <button 
+                            onClick={() => {
+                               // Quick fetch logic to add ETF to watchlist (mocking the exact price for now as we'd need another API call, but we can set it up for the WebSocket to catch)
+                               const newEtf = { symbol: mappedEtf.symbol, code: mappedEtf.symbol.slice(2), name: mappedEtf.name, price: 0, high: 0, low: 0, change: 0, changePercent: 0, volume: 0, amount: 0, trend: [] } as StockData;
+                               setStocks(prev => prev.some(s => s.symbol === mappedEtf.symbol) ? prev : [newEtf, ...prev]);
+                               setGroups(prev => prev.map(g => g.id === 'all' ? { ...g, symbols: [mappedEtf.symbol, ...g.symbols] } : g));
+                               setSelectedStock(newEtf);
+                               alert(`已将 ${mappedEtf.name} 加入【全部自选】并打开详情，稍后行情将自动更新。`);
+                            }}
+                            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded shadow transition-colors"
+                          >
+                            配置 {mappedEtf.name}
+                          </button>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+
                   <div className="flex-1 overflow-auto">
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pb-10">
                       {sectorStocks.length === 0 ? (
