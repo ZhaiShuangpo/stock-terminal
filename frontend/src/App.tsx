@@ -946,23 +946,38 @@ export default function App() {
                       {sectorStocks.length === 0 ? (
                         <div className="col-span-full text-center text-gray-500 mt-20">正在拉取成分股数据...</div>
                       ) : (
-                        sectorStocks.map((stock: any) => (
-                          <div key={stock.symbol} onClick={() => {
-                            // Optionally add to tracking and open chart
-                            const newStock = { symbol: stock.symbol, code: stock.code, name: stock.name, price: stock.price, high: stock.high, low: stock.low, change: stock.change, changePercent: stock.changePercent, volume: stock.volume, amount: stock.amount, pe: stock.pe, pb: stock.pb, marketCap: stock.marketCap, trend: [] } as StockData;
-                            setStocks(prev => prev.some(s => s.symbol === stock.symbol) ? prev : [newStock, ...prev]);
-                            setSelectedStock(newStock);
-                          }} className="bg-gray-900 border border-gray-800 rounded-lg p-3 flex justify-between items-center hover:border-gray-600 transition-colors cursor-pointer group">
-                            <div>
-                              <div className="text-gray-200 font-bold group-hover:text-white transition-colors">{stock.name}</div>
-                              <div className="text-xs text-gray-500 font-mono mt-0.5">{stock.code}</div>
+                        sectorStocks.map((stock: any) => {
+                          const isResonance = stock.pe > 0 && stock.pe < 25 && stock.pb > 0 && stock.pb < 3 && stock.changePercent > 0;
+                          return (
+                            <div key={stock.symbol} onClick={() => {
+                              // Optionally add to tracking and open chart
+                              const newStock = { symbol: stock.symbol, code: stock.code, name: stock.name, price: stock.price, high: stock.high, low: stock.low, change: stock.change, changePercent: stock.changePercent, volume: stock.volume, amount: stock.amount, pe: stock.pe, pb: stock.pb, marketCap: stock.marketCap, trend: [] } as StockData;
+                              setStocks(prev => prev.some(s => s.symbol === stock.symbol) ? prev : [newStock, ...prev]);
+                              setSelectedStock(newStock);
+                            }} className={`bg-gray-900 border ${isResonance ? 'border-yellow-600/50' : 'border-gray-800'} rounded-lg p-3 flex flex-col justify-between hover:border-gray-600 transition-colors cursor-pointer group relative overflow-hidden`}>
+                              {isResonance && <div className="absolute top-0 right-0 bg-gradient-to-l from-yellow-600/20 to-transparent w-16 h-full pointer-events-none"></div>}
+                              
+                              <div className="flex justify-between items-start mb-2">
+                                <div>
+                                  <div className="text-gray-200 font-bold group-hover:text-white transition-colors flex items-center space-x-2">
+                                    <span>{stock.name}</span>
+                                    {isResonance && <span className="text-[10px] bg-yellow-500/20 text-yellow-500 px-1 py-0.5 rounded font-bold border border-yellow-500/30">⭐ 共振首选</span>}
+                                  </div>
+                                  <div className="text-xs text-gray-500 font-mono mt-0.5">{stock.code}</div>
+                                </div>
+                                <div className="text-right">
+                                  <div className={`text-base font-mono font-bold ${getColorClass(stock.changePercent)}`}>{stock.price.toFixed(2)}</div>
+                                  <div className={`text-xs font-mono ${getColorClass(stock.changePercent)}`}>{stock.changePercent > 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%</div>
+                                </div>
+                              </div>
+                              <div className="flex items-center space-x-3 text-[10px] text-gray-500 border-t border-gray-800/50 pt-2 mt-1">
+                                <span>PE: {stock.pe > 0 ? stock.pe.toFixed(1) : '-'}</span>
+                                <span>PB: {stock.pb > 0 ? stock.pb.toFixed(2) : '-'}</span>
+                                <span>市值: {(stock.marketCap || 0).toFixed(0)}亿</span>
+                              </div>
                             </div>
-                            <div className="text-right">
-                              <div className={`text-base font-mono font-bold ${getColorClass(stock.changePercent)}`}>{stock.price.toFixed(2)}</div>
-                              <div className={`text-xs font-mono ${getColorClass(stock.changePercent)}`}>{stock.changePercent > 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%</div>
-                            </div>
-                          </div>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                   </div>

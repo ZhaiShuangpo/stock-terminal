@@ -305,7 +305,7 @@ async def fundflow_stock(symbol: str):
 @app.get("/api/sector/{sector_id}")
 async def get_sector_stocks(sector_id: str):
     # Fetch constituent stocks for a given sector from EastMoney
-    url = f"http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=40&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:{sector_id}"
+    url = f"http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=40&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:{sector_id}&fields=f12,f14,f2,f3,f4,f5,f6,f15,f16,f1,f9,f23,f21"
     headers = {'User-Agent': 'Mozilla/5.0'}
     async with httpx.AsyncClient() as client:
         try:
@@ -316,6 +316,20 @@ async def get_sector_stocks(sector_id: str):
                 for item in data["data"]["diff"]:
                     market_code = "sh" if item.get("f1") == 1 else "sz"
                     code = item.get("f12", "")
+                    
+                    try:
+                        pe = float(item.get("f9") or 0.0)
+                    except:
+                        pe = 0.0
+                    try:
+                        pb = float(item.get("f23") or 0.0)
+                    except:
+                        pb = 0.0
+                    try:
+                        marketCap = float(item.get("f21") or 0.0) / 100000000
+                    except:
+                        marketCap = 0.0
+                        
                     results.append({
                         "symbol": f"{market_code}{code}",
                         "code": code,
@@ -327,6 +341,9 @@ async def get_sector_stocks(sector_id: str):
                         "amount": float(item.get("f6", 0.0) or 0.0),
                         "high": float(item.get("f15", 0.0) or 0.0),
                         "low": float(item.get("f16", 0.0) or 0.0),
+                        "pe": pe,
+                        "pb": pb,
+                        "marketCap": marketCap
                     })
             return {"data": results}
         except Exception as e:
