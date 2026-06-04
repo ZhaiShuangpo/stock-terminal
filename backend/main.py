@@ -32,28 +32,25 @@ stock_states: Dict[str, dict] = {}
 import json
 
 async def fetch_sectors():
-    url = "http://vip.stock.finance.sina.com.cn/q/view/newSinaHy.php"
+    url = "http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=80&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:2+f:!50&fields=f12,f14,f3,f109,f110"
+    headers = {'User-Agent': 'Mozilla/5.0'}
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(url, timeout=3.0)
-            response.encoding = 'gbk'
-            text = response.text
-            json_str = text.split('=', 1)[1].strip().strip(';')
-            data = json.loads(json_str)
+            response = await client.get(url, headers=headers, timeout=3.0)
+            data = response.json()
             sectors = []
-            for k, v in data.items():
-                parts = v.split(',')
-                sectors.append({
-                    "id": k,
-                    "name": parts[1],
-                    "changePercent": float(parts[5]),
-                    "amount": float(parts[7]),
-                    "topStockName": parts[12],
-                    "topStockChange": float(parts[9])
-                })
-            sectors.sort(key=lambda x: x["changePercent"], reverse=True)
-            return sectors[:40]
-        except:
+            if "data" in data and "diff" in data["data"]:
+                for item in data["data"]["diff"]:
+                    sectors.append({
+                        "id": str(item.get("f12", "")),
+                        "name": str(item.get("f14", "")),
+                        "changePercent": float(item.get("f3", 0.0) or 0.0),
+                        "change5d": float(item.get("f109", 0.0) or 0.0),
+                        "change20d": float(item.get("f110", 0.0) or 0.0)
+                    })
+            return sectors
+        except Exception as e:
+            print("Fetch sectors error:", e)
             return []
 
 async def fetch_indices():
@@ -307,27 +304,30 @@ async def fundflow_stock(symbol: str):
 
 @app.get("/api/sector/{sector_id}")
 async def get_sector_stocks(sector_id: str):
-    # Fetch constituent stocks for a given sector
-    url = f"http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page=1&num=40&sort=changepercent&asc=0&node={sector_id}"
+    # Fetch constituent stocks for a given sector from EastMoney
+    url = f"http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=40&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:{sector_id}"
+    headers = {'User-Agent': 'Mozilla/5.0'}
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(url, timeout=5.0)
-            response.encoding = 'gbk'
+            response = await client.get(url, headers=headers, timeout=5.0)
             data = response.json()
             results = []
-            for item in data:
-                results.append({
-                    "symbol": item.get("symbol"),
-                    "code": item.get("code"),
-                    "name": item.get("name"),
-                    "price": float(item.get("trade", 0)),
-                    "change": float(item.get("pricechange", 0)),
-                    "changePercent": float(item.get("changepercent", 0)),
-                    "volume": float(item.get("volume", 0)),
-                    "amount": float(item.get("amount", 0)),
-                    "high": float(item.get("high", 0)),
-                    "low": float(item.get("low", 0)),
-                })
+            if "data" in data and "diff" in data["data"]:
+                for item in data["data"]["diff"]:
+                    market_code = "sh" if item.get("f1") == 1 else "sz"
+                    code = item.get("f12", "")
+                    results.append({
+                        "symbol": f"{market_code}{code}",
+                        "code": code,
+                        "name": item.get("f14", ""),
+                        "price": float(item.get("f2", 0.0) or 0.0),
+                        "change": float(item.get("f4", 0.0) or 0.0),
+                        "changePercent": float(item.get("f3", 0.0) or 0.0),
+                        "volume": float(item.get("f5", 0.0) or 0.0),
+                        "amount": float(item.get("f6", 0.0) or 0.0),
+                        "high": float(item.get("f15", 0.0) or 0.0),
+                        "low": float(item.get("f16", 0.0) or 0.0),
+                    })
             return {"data": results}
         except Exception as e:
             print(f"Sector fetch error: {e}")

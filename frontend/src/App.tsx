@@ -1046,9 +1046,24 @@ export default function App() {
                         sectors.sort((a, b) => b.changePercent - a.changePercent).map((sec, idx) => (
                           <div key={sec.name} onClick={() => handleSectorClick(sec)} className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col items-center justify-center hover:border-gray-600 transition-colors relative overflow-hidden cursor-pointer">
                             {idx < 3 && <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-red-500 to-orange-500"></div>}
+                            
+                            {sec.change20d < 0 && sec.change5d > 0 && (
+                              <div className="absolute top-2 right-2 bg-yellow-500/20 text-yellow-500 text-[10px] px-1.5 py-0.5 rounded font-bold border border-yellow-500/30 shadow-sm shadow-yellow-500/10">⭐左侧潜伏</div>
+                            )}
+
                             <div className="text-gray-300 font-bold mb-2 text-lg">{sec.name}</div>
                             <div className={`text-2xl font-mono font-bold ${getColorClass(sec.changePercent)}`}>
                               {sec.changePercent > 0 ? '+' : ''}{sec.changePercent.toFixed(2)}%
+                            </div>
+                            <div className="flex space-x-3 mt-2 text-xs font-mono">
+                              <div className="flex flex-col items-center">
+                                <span className="text-gray-600 mb-0.5">5日</span>
+                                <span className={getColorClass(sec.change5d)}>{sec.change5d > 0 ? '+' : ''}{sec.change5d.toFixed(2)}%</span>
+                              </div>
+                              <div className="flex flex-col items-center">
+                                <span className="text-gray-600 mb-0.5">20日</span>
+                                <span className={getColorClass(sec.change20d)}>{sec.change20d > 0 ? '+' : ''}{sec.change20d.toFixed(2)}%</span>
+                              </div>
                             </div>
                           </div>
                         ))
