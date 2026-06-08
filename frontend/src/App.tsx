@@ -330,7 +330,11 @@ export default function App() {
     }
   };
 
-  const allSymbols = useMemo(() => Array.from(new Set(groups.flatMap(g => g.symbols))), [groups]);
+  const allSymbols = useMemo(() => {
+    const groupSymbols = groups.flatMap(g => g.symbols);
+    const activePaperSymbols = paperTrades.filter(t => !t.sellPrice).map(t => t.symbol);
+    return Array.from(new Set([...groupSymbols, ...activePaperSymbols]));
+  }, [groups, paperTrades]);
   
   const wsRef = useRef<WebSocket | null>(null);
   const allSymbolsRef = useRef(allSymbols);
