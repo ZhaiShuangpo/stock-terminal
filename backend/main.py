@@ -7,11 +7,23 @@ from typing import Dict, List
 from google import genai
 from google.genai import types
 import os
+import akshare as ak
+import pandas as pd
+from datetime import datetime
 
 # Unset proxies to prevent akshare connection issues
 for k in ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
     if k in os.environ:
         del os.environ[k]
+
+# Global http client and caches
+http_client: httpx.AsyncClient = None
+
+cached_sectors = None
+last_sectors_fetch_time = 0
+
+cached_indices = None
+last_indices_fetch_time = 0
 
 app = FastAPI()
 
@@ -32,325 +44,337 @@ stock_states: Dict[str, dict] = {}
 import json
 
 async def fetch_sectors():
+    global http_client, cached_sectors, last_sectors_fetch_time
+    now = time.time()
+    if cached_sectors and (now - last_sectors_fetch_time < 15):
+        return cached_sectors
     url = "http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=80&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:2+f:!50&fields=f12,f14,f3,f109,f110"
     headers = {'User-Agent': 'Mozilla/5.0'}
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, headers=headers, timeout=3.0)
-            data = response.json()
-            sectors = []
-            if "data" in data and "diff" in data["data"]:
-                for item in data["data"]["diff"]:
-                    sectors.append({
-                        "id": str(item.get("f12", "")),
-                        "name": str(item.get("f14", "")),
-                        "changePercent": float(item.get("f3", 0.0) or 0.0),
-                        "change5d": float(item.get("f109", 0.0) or 0.0),
-                        "change20d": float(item.get("f110", 0.0) or 0.0)
-                    })
-            return sectors
-        except Exception as e:
-            print("Fetch sectors error:", e)
-            return []
+    try:
+        response = await http_client.get(url, headers=headers, timeout=3.0)
+        data = response.json()
+        sectors = []
+        if "data" in data and "diff" in data["data"]:
+            for item in data["data"]["diff"]:
+                sectors.append({
+                    "id": str(item.get("f12", "")),
+                    "name": str(item.get("f14", "")),
+                    "changePercent": float(item.get("f3", 0.0) or 0.0),
+                    "change5d": float(item.get("f109", 0.0) or 0.0),
+                    "change20d": float(item.get("f110", 0.0) or 0.0)
+                })
+        cached_sectors = sectors
+        last_sectors_fetch_time = now
+        return sectors
+    except Exception as e:
+        print("Fetch sectors error:", e)
+        return cached_sectors or []
 
 async def fetch_indices():
+    global http_client, cached_indices, last_indices_fetch_time
+    now = time.time()
+    if cached_indices and (now - last_indices_fetch_time < 2):
+        return cached_indices
     indices = ["s_sh000001", "s_sz399001", "s_sz399006", "s_sh000300"]
     url = f"http://qt.gtimg.cn/q={','.join(indices)}"
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, timeout=2.0)
-            results = []
-            for line in response.text.split(';'):
-                if '=' not in line: continue
-                parts = line.split('=')
-                data = parts[1].strip('"').split('~')
-                if len(data) < 6: continue
-                results.append({
-                    "name": data[1],
-                    "code": data[2],
-                    "price": float(data[3]),
-                    "change": float(data[4]),
-                    "changePercent": float(data[5]),
-                })
-            return results
-        except:
-            return []
+    try:
+        response = await http_client.get(url, timeout=2.0)
+        results = []
+        for line in response.text.split(';'):
+            if '=' not in line: continue
+            parts = line.split('=')
+            data = parts[1].strip('"').split('~')
+            if len(data) < 6: continue
+            results.append({
+                "name": data[1],
+                "code": data[2],
+                "price": float(data[3]),
+                "change": float(data[4]),
+                "changePercent": float(data[5]),
+            })
+        cached_indices = results
+        last_indices_fetch_time = now
+        return results
+    except Exception as e:
+        print("Fetch indices error:", e)
+        return cached_indices or []
 
 async def fetch_tencent_data(symbols: List[str]):
+    global http_client
     if not symbols:
         return [], []
     url = f"http://qt.gtimg.cn/q={','.join(symbols)}"
     alerts = []
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, timeout=3.0)
-            text = response.text
-            results = []
-            for line in text.split(';'):
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split('=')
-                if len(parts) < 2: continue
-                code_prefix = parts[0].split('_')[1] # sh600519
-                data_str = parts[1].strip('"')
-                fields = data_str.split('~')
-                if len(fields) > 35:
-                    name = fields[1]
-                    code = fields[2]
-                    price = float(fields[3])
-                    prev_close = float(fields[4])
-                    
-                    try:
-                        comp = fields[34].split('/')
-                        volume = float(comp[1]) * 100 
-                        amount = float(comp[2])
-                    except:
-                        volume = float(fields[6]) * 100
-                        amount = float(fields[37]) * 10000
-                    
-                    change = float(fields[31])
-                    change_percent = float(fields[32])
-                    limit_up_price = float(fields[47]) if fields[47] else 0
-                    limit_down_price = float(fields[48]) if fields[48] else 0
-                    
-                    if code_prefix not in stock_states:
-                        stock_states[code_prefix] = {"is_zt": False, "is_dt": False}
-                    state = stock_states[code_prefix]
-                    
-                    # 1. Anomaly Detection (Limit Up / Down & Broken Board)
-                    if limit_up_price > 0 and price >= limit_up_price:
-                        buy1_price = float(fields[9])
-                        buy1_vol = float(fields[10]) # in hands (100 shares)
-                        if buy1_price >= limit_up_price and buy1_vol > 0:
-                            seal_amount = (buy1_vol * 100 * buy1_price) / 100000000 # in 亿
-                            if not state["is_zt"]:
-                                alerts.append({
-                                    "time": time.strftime("%H:%M:%S"),
-                                    "symbol": code_prefix, "name": name,
-                                    "type": "封死涨停", "value": f"封单 {seal_amount:.1f}亿"
-                                })
-                                state["is_zt"] = True
-                    else:
-                        if state["is_zt"]:
+    try:
+        response = await http_client.get(url, timeout=3.0)
+        text = response.text
+        results = []
+        for line in text.split(';'):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split('=')
+            if len(parts) < 2: continue
+            code_prefix = parts[0].split('_')[1] # sh600519
+            data_str = parts[1].strip('"')
+            fields = data_str.split('~')
+            if len(fields) > 35:
+                name = fields[1]
+                code = fields[2]
+                price = float(fields[3])
+                prev_close = float(fields[4])
+                
+                try:
+                    comp = fields[34].split('/')
+                    volume = float(comp[1]) * 100 
+                    amount = float(comp[2])
+                except:
+                    volume = float(fields[6]) * 100
+                    amount = float(fields[37]) * 10000
+                
+                change = float(fields[31])
+                change_percent = float(fields[32])
+                limit_up_price = float(fields[47]) if fields[47] else 0
+                limit_down_price = float(fields[48]) if fields[48] else 0
+                
+                if code_prefix not in stock_states:
+                    stock_states[code_prefix] = {"is_zt": False, "is_dt": False}
+                state = stock_states[code_prefix]
+                
+                # 1. Anomaly Detection (Limit Up / Down & Broken Board)
+                if limit_up_price > 0 and price >= limit_up_price:
+                    buy1_price = float(fields[9])
+                    buy1_vol = float(fields[10]) # in hands (100 shares)
+                    if buy1_price >= limit_up_price and buy1_vol > 0:
+                        seal_amount = (buy1_vol * 100 * buy1_price) / 100000000 # in 亿
+                        if not state["is_zt"]:
                             alerts.append({
                                 "time": time.strftime("%H:%M:%S"),
                                 "symbol": code_prefix, "name": name,
-                                "type": "涨停炸板", "value": "封单撤销/被砸"
+                                "type": "封死涨停", "value": f"封单 {seal_amount:.1f}亿"
                             })
-                            state["is_zt"] = False
+                            state["is_zt"] = True
+                else:
+                    if state["is_zt"]:
+                        alerts.append({
+                            "time": time.strftime("%H:%M:%S"),
+                            "symbol": code_prefix, "name": name,
+                            "type": "涨停炸板", "value": "封单撤销/被砸"
+                        })
+                        state["is_zt"] = False
 
-                    if limit_down_price > 0 and price <= limit_down_price:
-                        sell1_price = float(fields[19])
-                        sell1_vol = float(fields[20])
-                        if sell1_price <= limit_down_price and sell1_vol > 0:
-                            seal_amount = (sell1_vol * 100 * sell1_price) / 100000000
-                            if not state["is_dt"]:
-                                alerts.append({
-                                    "time": time.strftime("%H:%M:%S"),
-                                    "symbol": code_prefix, "name": name,
-                                    "type": "封死跌停", "value": f"封单 {seal_amount:.1f}亿"
-                                })
-                                state["is_dt"] = True
-                    else:
-                        if state["is_dt"]:
+                if limit_down_price > 0 and price <= limit_down_price:
+                    sell1_price = float(fields[19])
+                    sell1_vol = float(fields[20])
+                    if sell1_price <= limit_down_price and sell1_vol > 0:
+                        seal_amount = (sell1_vol * 100 * sell1_price) / 100000000
+                        if not state["is_dt"]:
                             alerts.append({
                                 "time": time.strftime("%H:%M:%S"),
                                 "symbol": code_prefix, "name": name,
-                                "type": "跌停撬开", "value": "巨单撬板"
+                                "type": "封死跌停", "value": f"封单 {seal_amount:.1f}亿"
                             })
-                            state["is_dt"] = False
+                            state["is_dt"] = True
+                else:
+                    if state["is_dt"]:
+                        alerts.append({
+                            "time": time.strftime("%H:%M:%S"),
+                            "symbol": code_prefix, "name": name,
+                            "type": "跌停撬开", "value": "巨单撬板"
+                        })
+                        state["is_dt"] = False
 
-                    # 2. Large Order Tracking (千万大单)
-                    if code_prefix in prev_amounts:
-                        delta_amount = amount - prev_amounts[code_prefix]
-                        if delta_amount >= 10000000: # 10 Million RMB
-                            if price > prev_prices.get(code_prefix, price):
-                                alerts.append({
-                                    "time": time.strftime("%H:%M:%S"),
-                                    "symbol": code_prefix, "name": name,
-                                    "type": "大单扫货", "value": f"{delta_amount/10000:.0f}万"
-                                })
-                            elif price < prev_prices.get(code_prefix, price):
-                                alerts.append({
-                                    "time": time.strftime("%H:%M:%S"),
-                                    "symbol": code_prefix, "name": name,
-                                    "type": "大单砸盘", "value": f"{delta_amount/10000:.0f}万"
-                                })
+                # 2. Large Order Tracking (千万大单)
+                if code_prefix in prev_amounts:
+                    delta_amount = amount - prev_amounts[code_prefix]
+                    if delta_amount >= 10000000: # 10 Million RMB
+                        if price > prev_prices.get(code_prefix, price):
+                            alerts.append({
+                                "time": time.strftime("%H:%M:%S"),
+                                "symbol": code_prefix, "name": name,
+                                "type": "大单扫货", "value": f"{delta_amount/10000:.0f}万"
+                            })
+                        elif price < prev_prices.get(code_prefix, price):
+                            alerts.append({
+                                "time": time.strftime("%H:%M:%S"),
+                                "symbol": code_prefix, "name": name,
+                                "type": "大单砸盘", "value": f"{delta_amount/10000:.0f}万"
+                            })
 
-                    # 3. Simple Jump Detection
-                    if code_prefix in prev_prices:
-                        old_p = prev_prices[code_prefix]
-                        if old_p > 0:
-                            jump = (price - old_p) / old_p * 100
-                            if abs(jump) >= 0.8: # 0.8% jump in 3 seconds is very strong
-                                alerts.append({
-                                    "time": time.strftime("%H:%M:%S"),
-                                    "symbol": code_prefix,
-                                    "name": name,
-                                    "type": "急速拉升" if jump > 0 else "快速跳水",
-                                    "value": f"{'+' if jump > 0 else ''}{jump:.2f}%"
-                                })
+                # 3. Simple Jump Detection
+                if code_prefix in prev_prices:
+                    old_p = prev_prices[code_prefix]
+                    if old_p > 0:
+                        jump = (price - old_p) / old_p * 100
+                        if abs(jump) >= 0.8: # 0.8% jump in 3 seconds is very strong
+                            alerts.append({
+                                "time": time.strftime("%H:%M:%S"),
+                                "symbol": code_prefix,
+                                "name": name,
+                                "type": "急速拉升" if jump > 0 else "快速跳水",
+                                "value": f"{'+' if jump > 0 else ''}{jump:.2f}%"
+                            })
 
-                    prev_prices[code_prefix] = price
-                    prev_amounts[code_prefix] = amount
+                prev_prices[code_prefix] = price
+                prev_amounts[code_prefix] = amount
 
-                    if code_prefix not in stock_history:
-                        stock_history[code_prefix] = []
-                    
-                    stock_history[code_prefix].append(price)
-                    if len(stock_history[code_prefix]) > 60:
-                        stock_history[code_prefix].pop(0)
+                if code_prefix not in stock_history:
+                    stock_history[code_prefix] = []
+                
+                stock_history[code_prefix].append(price)
+                if len(stock_history[code_prefix]) > 60:
+                    stock_history[code_prefix].pop(0)
 
-                    results.append({
-                        "code": code,
-                        "symbol": code_prefix,
-                        "name": name,
-                        "price": price,
-                        "high": float(fields[33]),
-                        "low": float(fields[34]),
-                        "change": change,
-                        "changePercent": change_percent,
-                        "volume": volume,
-                        "amount": amount,
-                        "pe": float(fields[39]) if fields[39] else 0.0,
-                        "pb": float(fields[46]) if fields[46] else 0.0,
-                        "marketCap": float(fields[45]) if fields[45] else 0.0,
-                        "trend": list(stock_history[code_prefix])
-                    })
-            return results, alerts
-        except Exception as e:
-            print(f"Error fetching data: {e}")
-            return [], []
+                results.append({
+                    "code": code,
+                    "symbol": code_prefix,
+                    "name": name,
+                    "price": price,
+                    "high": float(fields[33]),
+                    "low": float(fields[34]),
+                    "change": change,
+                    "changePercent": change_percent,
+                    "volume": volume,
+                    "amount": amount,
+                    "pe": float(fields[39]) if fields[39] else 0.0,
+                    "pb": float(fields[46]) if fields[46] else 0.0,
+                    "marketCap": float(fields[45]) if fields[45] else 0.0,
+                    "trend": list(stock_history[code_prefix])
+                })
+        return results, alerts
+    except Exception as e:
+        print(f"Error fetching data: {e}")
+        return [], []
 
 @app.get("/api/search")
 async def search_stock(q: str):
+    global http_client
     if not q:
         return {"results": []}
     url = f"https://smartbox.gtimg.cn/s3/?v=2&q={q}&t=all"
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, timeout=3.0)
-            text = response.text
-            if 'v_hint="' in text:
-                data_str = text.split('v_hint="')[1].split('"')[0]
-                results = []
-                for item in data_str.split('^'):
-                    if not item: continue
-                    parts = item.split('~')
-                    if len(parts) >= 3:
-                        market = parts[0]
-                        code = parts[1]
-                        name = parts[2]
-                        if market in ['sh', 'sz']:
-                            try:
-                                name = name.encode('utf-8').decode('unicode_escape')
-                            except:
-                                pass
-                            results.append({
-                                "symbol": f"{market}{code}",
-                                "name": name,
-                                "code": code
-                            })
-                return {"results": results}
-        except Exception as e:
-            print(f"Search error: {e}")
-            return {"results": []}
+    try:
+        response = await http_client.get(url, timeout=3.0)
+        text = response.text
+        if 'v_hint="' in text:
+            data_str = text.split('v_hint="')[1].split('"')[0]
+            results = []
+            for item in data_str.split('^'):
+                if not item: continue
+                parts = item.split('~')
+                if len(parts) >= 3:
+                    market = parts[0]
+                    code = parts[1]
+                    name = parts[2]
+                    if market in ['sh', 'sz']:
+                        try:
+                            name = name.encode('utf-8').decode('unicode_escape')
+                        except:
+                            pass
+                        results.append({
+                            "symbol": f"{market}{code}",
+                            "name": name,
+                            "code": code
+                        })
+            return {"results": results}
+    except Exception as e:
+        print(f"Search error: {e}")
+        return {"results": []}
     return {"results": []}
 
 @app.get("/api/intraday")
 async def intraday_stock(symbol: str):
+    global http_client
     if not symbol:
         return {"data": []}
     url = f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={symbol}"
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, timeout=3.0)
-            data = response.json()
-            if data.get("code") == 0 and symbol in data.get("data", {}):
-                stock_data = data["data"][symbol]["data"]["data"]
-                date_str = data["data"][symbol]["data"]["date"]
-                return {"data": stock_data, "date": date_str}
-        except Exception as e:
-            print(f"Intraday error: {e}")
-            return {"data": []}
+    try:
+        response = await http_client.get(url, timeout=3.0)
+        data = response.json()
+        if data.get("code") == 0 and symbol in data.get("data", {}):
+            stock_data = data["data"][symbol]["data"]["data"]
+            date_str = data["data"][symbol]["data"]["date"]
+            return {"data": stock_data, "date": date_str}
+    except Exception as e:
+        print(f"Intraday error: {e}")
+        return {"data": []}
     return {"data": []}
 
 @app.get("/api/fundflow")
 async def fundflow_stock(symbol: str):
+    global http_client
     if not symbol:
         return {"data": None}
     url = f"http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_lscjfb?page=1&num=1&sort=opendate&asc=0&daima={symbol}"
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, timeout=3.0)
-            data = response.json()
-            if data and len(data) > 0:
-                item = data[0]
-                # Sina's r0_net is super large order net inflow, r1_net is large order net inflow
-                r0_net = float(item.get("r0_net", 0))
-                r1_net = float(item.get("r1_net", 0))
-                main_net_amount = r0_net + r1_net
-                return {
-                    "data": {
-                        "netAmount": main_net_amount,
-                        "ratioAmount": float(item.get("ratioamount", 0))
-                    }
+    try:
+        response = await http_client.get(url, timeout=3.0)
+        data = response.json()
+        if data and len(data) > 0:
+            item = data[0]
+            # Sina's r0_net is super large order net inflow, r1_net is large order net inflow
+            r0_net = float(item.get("r0_net", 0))
+            r1_net = float(item.get("r1_net", 0))
+            main_net_amount = r0_net + r1_net
+            return {
+                "data": {
+                    "netAmount": main_net_amount,
+                    "ratioAmount": float(item.get("ratioamount", 0))
                 }
-        except Exception as e:
-            print(f"Fundflow error: {e}")
-            return {"data": None}
+            }
+    except Exception as e:
+        print(f"Fundflow error: {e}")
+        return {"data": None}
     return {"data": None}
 
 @app.get("/api/sector/{sector_id}")
 async def get_sector_stocks(sector_id: str):
+    global http_client
     # Fetch constituent stocks for a given sector from EastMoney
     url = f"http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=40&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:{sector_id}&fields=f12,f14,f2,f3,f4,f5,f6,f15,f16,f1,f9,f23,f21"
     headers = {'User-Agent': 'Mozilla/5.0'}
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, headers=headers, timeout=5.0)
-            data = response.json()
-            results = []
-            if "data" in data and "diff" in data["data"]:
-                for item in data["data"]["diff"]:
-                    market_code = "sh" if item.get("f1") == 1 else "sz"
-                    code = item.get("f12", "")
+    try:
+        response = await http_client.get(url, headers=headers, timeout=5.0)
+        data = response.json()
+        results = []
+        if "data" in data and "diff" in data["data"]:
+            for item in data["data"]["diff"]:
+                market_code = "sh" if item.get("f1") == 1 else "sz"
+                code = item.get("f12", "")
+                
+                try:
+                    pe = float(item.get("f9") or 0.0)
+                except:
+                    pe = 0.0
+                try:
+                    pb = float(item.get("f23") or 0.0)
+                except:
+                    pb = 0.0
+                try:
+                    marketCap = float(item.get("f21") or 0.0) / 100000000
+                except:
+                    marketCap = 0.0
                     
-                    try:
-                        pe = float(item.get("f9") or 0.0)
-                    except:
-                        pe = 0.0
-                    try:
-                        pb = float(item.get("f23") or 0.0)
-                    except:
-                        pb = 0.0
-                    try:
-                        marketCap = float(item.get("f21") or 0.0) / 100000000
-                    except:
-                        marketCap = 0.0
-                        
-                    results.append({
-                        "symbol": f"{market_code}{code}",
-                        "code": code,
-                        "name": item.get("f14", ""),
-                        "price": float(item.get("f2", 0.0) or 0.0),
-                        "change": float(item.get("f4", 0.0) or 0.0),
-                        "changePercent": float(item.get("f3", 0.0) or 0.0),
-                        "volume": float(item.get("f5", 0.0) or 0.0),
-                        "amount": float(item.get("f6", 0.0) or 0.0),
-                        "high": float(item.get("f15", 0.0) or 0.0),
-                        "low": float(item.get("f16", 0.0) or 0.0),
-                        "pe": pe,
-                        "pb": pb,
-                        "marketCap": marketCap
-                    })
-            return {"data": results}
-        except Exception as e:
-            print(f"Sector fetch error: {e}")
-            return {"data": []}
+                results.append({
+                    "symbol": f"{market_code}{code}",
+                    "code": code,
+                    "name": item.get("f14", ""),
+                    "price": float(item.get("f2", 0.0) or 0.0),
+                    "change": float(item.get("f4", 0.0) or 0.0),
+                    "changePercent": float(item.get("f3", 0.0) or 0.0),
+                    "volume": float(item.get("f5", 0.0) or 0.0),
+                    "amount": float(item.get("f6", 0.0) or 0.0),
+                    "high": float(item.get("f15", 0.0) or 0.0),
+                    "low": float(item.get("f16", 0.0) or 0.0),
+                    "pe": pe,
+                    "pb": pb,
+                    "marketCap": marketCap
+                })
+        return {"data": results}
+    except Exception as e:
+        print(f"Sector fetch error: {e}")
+        return {"data": []}
 
 async def get_kline_data(symbol: str, period: str = "day", limit: int = 100):
+    global http_client
     # period: day, week, month
     if symbol.startswith("sh") or symbol.startswith("sz"):
         req_symbol = symbol
@@ -358,18 +382,17 @@ async def get_kline_data(symbol: str, period: str = "day", limit: int = 100):
         req_symbol = f"sh{symbol}" if symbol.startswith("6") else f"sz{symbol}"
     
     url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={req_symbol},{period},,,{limit},qfq"
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, timeout=5.0)
-            data = response.json()
-            if data and "data" in data and req_symbol in data["data"]:
-                stock_data = data["data"][req_symbol]
-                kline_key = f"qfq{period}" if f"qfq{period}" in stock_data else period
-                if kline_key in stock_data:
-                    return stock_data[kline_key]
-        except Exception as e:
-            print(f"K-line error: {e}")
-            return None
+    try:
+        response = await http_client.get(url, timeout=5.0)
+        data = response.json()
+        if data and "data" in data and req_symbol in data["data"]:
+            stock_data = data["data"][req_symbol]
+            kline_key = f"qfq{period}" if f"qfq{period}" in stock_data else period
+            if kline_key in stock_data:
+                return stock_data[kline_key]
+    except Exception as e:
+        print(f"K-line error: {e}")
+        return None
     return None
 
 def calculate_ema(data_list, period):
@@ -559,9 +582,8 @@ async def generate_market_review(data: dict, x_gemini_key: str = Header(None)):
         for s in stocks_summary[:15]: # Limit to top 15 to avoid token bloat
             context += f"- {s['name']}({s['code']}): 现价{s['price']}, 涨跌幅{s['changePercent']}%, 成交额{s['amount']/100000000:.2f}亿\n"
             
-        import asyncio
-        loop = asyncio.get_event_loop()
-        sentiment_data = await loop.run_in_executor(None, get_market_sentiment)
+        global cached_sentiment
+        sentiment_data = cached_sentiment
         
         if sentiment_data:
             context += "\n【全市场真实情绪扫描】\n"
@@ -760,13 +782,10 @@ async def evaluate_thesis(payload: dict, x_gemini_key: str = Header(None)):
         print(f"Evaluate thesis error: {e}")
         return {"evaluation": "系统错误，请重试。", "status": "WARNING"}
 
-@app.get("/api/market_sentiment")
-def get_market_sentiment():
+cached_sentiment = {}
+
+def get_market_sentiment_helper():
     try:
-        import akshare as ak
-        import pandas as pd
-        from datetime import datetime
-        
         date_str = datetime.now().strftime('%Y%m%d')
         
         # 1. Total Volume & Up/Down Counts
@@ -812,6 +831,129 @@ def get_market_sentiment():
     except Exception as e:
         print(f"Market sentiment error: {e}")
         return {}
+
+async def update_sentiment_loop():
+    import datetime
+    global cached_sentiment
+    while True:
+        try:
+            now = datetime.datetime.now()
+            # A-share trading hours: Mon-Fri 9:15-11:40, 13:00-15:10
+            is_weekday = now.weekday() < 5
+            is_trading_hours = False
+            if is_weekday:
+                if (now.hour == 9 and now.minute >= 15) or (now.hour == 10) or (now.hour == 11 and now.minute <= 40):
+                    is_trading_hours = True
+                elif (now.hour == 13) or (now.hour == 14) or (now.hour == 15 and now.minute <= 10):
+                    is_trading_hours = True
+            
+            if not cached_sentiment or is_trading_hours:
+                print("Background updating market sentiment data...")
+                loop = asyncio.get_event_loop()
+                data = await loop.run_in_executor(None, get_market_sentiment_helper)
+                if data:
+                    cached_sentiment = data
+                    print("Background updated market sentiment successfully.")
+            
+            if is_trading_hours:
+                await asyncio.sleep(120)
+            else:
+                await asyncio.sleep(900)
+        except Exception as e:
+            print(f"Background sentiment updater error: {e}")
+            await asyncio.sleep(60)
+
+@app.on_event("startup")
+async def startup_event():
+    global http_client
+    http_client = httpx.AsyncClient(timeout=5.0)
+    asyncio.create_task(update_sentiment_loop())
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global http_client
+    if http_client:
+        await http_client.aclose()
+
+@app.get("/api/market_sentiment")
+def get_market_sentiment():
+    global cached_sentiment
+    if not cached_sentiment:
+        return {
+            "up": 0,
+            "down": 0,
+            "flat": 0,
+            "limitUp": 0,
+            "limitDown": 0,
+            "totalVolume": 0.0,
+            "ladder": {},
+            "prevZtAvg": 0.0,
+            "loading": True
+        }
+    return cached_sentiment
+
+@app.get("/api/news_summary")
+async def get_news_summary(symbol: str, name: str = "", x_gemini_key: str = Header(None)):
+    if not x_gemini_key:
+        raise HTTPException(status_code=401, detail="Gemini API Key is required")
+    try:
+        client = genai.Client(api_key=x_gemini_key)
+        stock_identifier = f"{name}({symbol})" if name else symbol
+        
+        prompt = f"""
+请使用你的联网搜索功能，检索股票【{stock_identifier}】最近一周的重大新闻、公司公告、财报或行业研报。
+基于检索到的真实信息，为交易员生成一份极其精炼的“太长不看 (TL;DR)”摘要，帮助交易员快速评估该股最近的动态。
+
+要求输出包含以下三部分（用 Markdown 列表呈现）：
+1. 🔴【利空因素/警示】：最近有哪些潜在利空、减持、解禁或负面消息？如果没有，明确写“暂无”。
+2. 🟢【利好因素/催化】：最近有哪些业绩超预期、新订单、政策利好、或者是资金青睐？如果没有，明确写“暂无”。
+3. 🔵【关键经营/财务变动】：最近公司有什么业务调整、重大合同、高管变动等中性关键事项？
+
+最后给出综合情感判定（Positive, Neutral, Negative 之一）。
+
+【强制格式要求】
+你必须返回一个严格合法的 JSON 对象，不要包含 markdown 代码块包装，直接返回 JSON 字符串。格式如下：
+{{
+  "summary": "以Markdown格式排版的上述三部分分析（利空/利好/关键变动，用小标题或列表，注意换行符转义）",
+  "sentiment": "POSITIVE" // 必须是 "POSITIVE", "NEUTRAL", "NEGATIVE" 之一
+}}
+"""
+        models_to_try = ['gemini-2.5-flash', 'gemini-3-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite']
+        last_error = None
+        
+        for model_name in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[{"google_search": {}}],
+                    )
+                )
+                import json
+                import re
+                try:
+                    text = response.text.strip()
+                    if text.startswith("```"):
+                        text = re.sub(r"^```(?:json)?\n", "", text)
+                        text = re.sub(r"\n```$", "", text)
+                    res_data = json.loads(text)
+                    return res_data
+                except json.JSONDecodeError:
+                    sentiment = "NEUTRAL"
+                    if "利好" in response.text or "POSITIVE" in response.text.upper():
+                        sentiment = "POSITIVE"
+                    elif "利空" in response.text or "NEGATIVE" in response.text.upper():
+                        sentiment = "NEGATIVE"
+                    return {"summary": response.text, "sentiment": sentiment}
+            except Exception as e:
+                print(f"Model {model_name} failed: {e}")
+                last_error = e
+
+        return {"summary": f"新闻总结失败: 所有模型均无响应。最后错误: {str(last_error)}", "sentiment": "NEUTRAL"}
+    except Exception as e:
+        print(f"News summary error: {e}")
+        return {"summary": f"总结失败: {str(e)}", "sentiment": "NEUTRAL"}
 
 if __name__ == "__main__":
     import uvicorn

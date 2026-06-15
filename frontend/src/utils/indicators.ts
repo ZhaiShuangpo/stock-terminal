@@ -1,14 +1,15 @@
 export function calculateMA(data: any[], period: number) {
   const result: any[] = [];
+  let sum = 0;
   for (let i = 0; i < data.length; i++) {
-    if (i < period - 1) {
-      continue;
+    const val = data[i].value ?? data[i].close;
+    sum += val;
+    if (i >= period) {
+      sum -= data[i - period].value ?? data[i - period].close;
     }
-    let sum = 0;
-    for (let j = 0; j < period; j++) {
-      sum += data[i - j].value ?? data[i - j].close;
+    if (i >= period - 1) {
+      result.push({ time: data[i].time, value: sum / period });
     }
-    result.push({ time: data[i].time, value: sum / period });
   }
   return result;
 }

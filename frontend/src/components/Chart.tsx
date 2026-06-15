@@ -17,6 +17,12 @@ interface ChartProps {
   macdData?: { dif: any[]; dea: any[]; histogram: any[] };
   supportPrice?: number;
   resistancePrice?: number;
+  visibleIndicators?: {
+    ma: boolean;
+    macd: boolean;
+    volume: boolean;
+    vp: boolean;
+  };
   colors?: {
     backgroundColor?: string;
     lineColor?: string;
@@ -43,6 +49,7 @@ export const Chart = ({
   macdData,
   supportPrice,
   resistancePrice,
+  visibleIndicators = { ma: true, macd: true, volume: true, vp: true },
   colors: {
     backgroundColor = 'transparent',
     lineColor = '#2962FF',
@@ -74,10 +81,16 @@ export const Chart = ({
   const dataRef = useRef(data);
   const volumeDataRef = useRef(volumeData);
 
+  const visibleIndicatorsRef = useRef(visibleIndicators);
+
   useEffect(() => {
     dataRef.current = data;
     volumeDataRef.current = volumeData;
   }, [data, volumeData]);
+
+  useEffect(() => {
+    visibleIndicatorsRef.current = visibleIndicators;
+  }, [visibleIndicators]);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -238,7 +251,7 @@ export const Chart = ({
     vpContainerRef.current = vpContainer;
 
     const updateVolumeProfile = () => {
-      if (type !== 'candlestick' || !seriesRef.current || !dataRef.current || !volumeDataRef.current || dataRef.current.length === 0) {
+      if (!visibleIndicatorsRef.current.vp || type !== 'candlestick' || !seriesRef.current || !dataRef.current || !volumeDataRef.current || dataRef.current.length === 0) {
         vpContainer.style.display = 'none';
         return;
       }
@@ -318,10 +331,34 @@ export const Chart = ({
       vpContainer.innerHTML = html;
     };
 
-    chart.timeScale().subscribeVisibleLogicalRangeChange(updateVolumeProfile);
+    let lastVpTime = 0;
+    let vpTimeout: any = null;
+    const updateVolumeProfileThrottled = () => {
+      const now = Date.now();
+      const throttleMs = 100;
+      if (now - lastVpTime >= throttleMs) {
+        if (vpTimeout) {
+          clearTimeout(vpTimeout);
+          vpTimeout = null;
+        }
+        updateVolumeProfile();
+        lastVpTime = now;
+      } else {
+        if (!vpTimeout) {
+          vpTimeout = setTimeout(() => {
+            updateVolumeProfile();
+            lastVpTime = Date.now();
+            vpTimeout = null;
+          }, throttleMs - (now - lastVpTime));
+        }
+      }
+    };
+    updateVpRef.current = updateVolumeProfileThrottled;
+
+    chart.timeScale().subscribeVisibleLogicalRangeChange(updateVolumeProfileThrottled);
 
     chart.subscribeCrosshairMove((param) => {
-      updateVolumeProfile();
+      updateVolumeProfileThrottled();
       if (
         param.point === undefined ||
         !param.time ||
@@ -412,6 +449,7 @@ export const Chart = ({
       chart.remove();
       tooltip.remove();
       vpContainer.remove();
+      if (vpTimeout) clearTimeout(vpTimeout);
       supportLineRef.current = null;
       resistanceLineRef.current = null;
       markersPrimitiveRef.current = null;
@@ -486,6 +524,27 @@ export const Chart = ({
       setTimeout(() => updateVpRef.current(), 50);
     }
   }, [data, vwapData, markers, type, ma5Data, ma10Data, ma20Data, volumeData, macdData, supportPrice, resistancePrice]);
+
+  useEffect(() => {
+    if (type === 'candlestick') {
+      if (ma5SeriesRef.current) ma5SeriesRef.current.applyOptions({ visible: visibleIndicators.ma });
+      if (ma10SeriesRef.current) ma10SeriesRef.current.applyOptions({ visible: visibleIndicators.ma });
+      if (ma20SeriesRef.current) ma20SeriesRef.current.applyOptions({ visible: visibleIndicators.ma });
+      if (ma60SeriesRef.current) ma60SeriesRef.current.applyOptions({ visible: visibleIndicators.ma });
+      if (ma120SeriesRef.current) ma120SeriesRef.current.applyOptions({ visible: visibleIndicators.ma });
+      
+      if (volumeSeriesRef.current) volumeSeriesRef.current.applyOptions({ visible: visibleIndicators.volume });
+      
+      if (macdDifRef.current) macdDifRef.current.applyOptions({ visible: visibleIndicators.macd });
+      if (macdDeaRef.current) macdDeaRef.current.applyOptions({ visible: visibleIndicators.macd });
+      if (macdHistRef.current) macdHistRef.current.applyOptions({ visible: visibleIndicators.macd });
+      
+      if (updateVpRef.current) {
+        updateVpRef.current();
+      }
+    }
+  }, [type, visibleIndicators.ma, visibleIndicators.volume, visibleIndicators.macd, visibleIndicators.vp]);
+
 
   return <div ref={chartContainerRef} className="w-full h-full relative" />;
 };

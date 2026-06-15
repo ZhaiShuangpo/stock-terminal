@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
-import { Activity, Settings, Search, X, GripVertical } from 'lucide-react';
+import { Activity, Settings, Search, X, GripVertical, Folder, File, Files, GitBranch, Play, ChevronDown, ChevronRight } from 'lucide-react';
 import { Chart } from './components/Chart';
 import { calculateMA, calculateMACD } from './utils/indicators';
 import { SECTOR_ETF_MAP } from './utils/etfMapping';
@@ -229,6 +229,382 @@ interface AIAnalysisResult {
   winRate?: string | null;
 }
 
+interface VSCodeMockProps {
+  stocks: StockData[];
+  onClose: () => void;
+}
+
+function VSCodeMock({ stocks, onClose }: VSCodeMockProps) {
+  const [activeFile, setActiveFile] = useState('config.json');
+  const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({
+    root: true,
+    backend: true,
+    src: true,
+    components: true
+  });
+
+  const toggleFolder = (folder: string) => {
+    setOpenFolders(prev => ({ ...prev, [folder]: !prev[folder] }));
+  };
+
+  const generateConfigJson = () => {
+    const configObj = {
+      environment: "production",
+      services: stocks.map(s => ({
+        name: `svc-stock-${s.symbol}`,
+        port: Number(s.code) || 8000,
+        rate_limit: s.price,
+        delta_pct: s.changePercent,
+        active: true,
+        threads: s.pe && s.pe > 0 ? Math.round(s.pe) : 12,
+        memory_mb: s.marketCap && s.marketCap > 0 ? Math.round(s.marketCap * 10) : 1024
+      })),
+      pipeline: {
+        websocket_port: 8000,
+        enable_ssl: false,
+        timeout_ms: 3000
+      }
+    };
+    return JSON.stringify(configObj, null, 2);
+  };
+
+  const highlightJson = (jsonStr: string) => {
+    return jsonStr.replace(
+      /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
+      (match) => {
+        let cls = 'text-blue-400';
+        if (/^"/.test(match)) {
+          if (/:$/.test(match)) {
+            cls = 'text-yellow-300';
+          } else {
+            cls = 'text-green-400';
+          }
+        } else if (/true|false/.test(match)) {
+          cls = 'text-orange-400';
+        } else if (/null/.test(match)) {
+          cls = 'text-purple-400';
+        }
+        return `<span class="${cls}">${match}</span>`;
+      }
+    );
+  };
+
+  const highlightJs = (code: string) => {
+    return code
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\b(import|export|default|const|let|var|function|return|if|else|for|while|class|interface|type|from|typeof|new|try|catch|finally|async|await)\b/g, '<span class="text-purple-400">$1</span>')
+      .replace(/\b(useState|useEffect|createConnection|setData|setStatus|on|close)\b/g, '<span class="text-blue-400">$1</span>')
+      .replace(/(['"`].*?['"`])/g, '<span class="text-green-400">$1</span>')
+      .replace(/\b(\d+)\b/g, '<span class="text-orange-400">$1</span>')
+      .replace(/(\/\/.*)/g, '<span class="text-gray-500">$1</span>');
+  };
+
+  const highlightPy = (code: string) => {
+    return code
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\b(import|from|def|async|await|try|except|as|print|while|True|False|None|class|return)\b/g, '<span class="text-purple-400">$1</span>')
+      .replace(/(@\w+)/g, '<span class="text-yellow-400">$1</span>')
+      .replace(/(['"`].*?['"`])/g, '<span class="text-green-400">$1</span>')
+      .replace(/#.*/g, '<span class="text-gray-500">$&</span>');
+  };
+
+  const mockAppCode = `import React, { useState, useEffect } from 'react';
+import { createConnection } from './utils/socket';
+import { Chart } from './components/Chart';
+
+export default function App() {
+  const [data, setData] = useState([]);
+  const [status, setStatus] = useState('disconnected');
+
+  useEffect(() => {
+    const conn = createConnection('ws://localhost:8000/ws');
+    conn.on('connect', () => setStatus('connected'));
+    conn.on('data', (payload) => setData(payload));
+    return () => conn.close();
+  }, []);
+
+  return (
+    <div className="app-container">
+      <header className="app-header">
+        <h1>System Monitor Panel</h1>
+        <span className={\`status-dot \${status}\`}>{status}</span>
+      </header>
+      <main className="app-body">
+        <Chart data={data} type="line" />
+      </main>
+    </div>
+  );
+}`;
+
+  const mockChartCode = `import { useEffect, useRef } from 'react';
+import { createChart, ColorType } from 'lightweight-charts';
+
+export const Chart = ({ data, type = 'line' }) => {
+  const chartContainerRef = useRef(null);
+
+  useEffect(() => {
+    if (!chartContainerRef.current) return;
+    const chart = createChart(chartContainerRef.current, {
+      layout: { background: { type: ColorType.Solid, color: '#1e1e1e' } },
+      width: 400,
+      height: 200
+    });
+    const series = chart.addAreaSeries();
+    series.setData(data);
+    return () => chart.remove();
+  }, [data]);
+
+  return <div ref={chartContainerRef} className="w-full h-full" />;
+};`;
+
+  const mockPyCode = `import asyncio
+import time
+from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+)
+
+@app.websocket("/ws/market")
+async def ws_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            # Broadcast pipeline metrics
+            metrics = get_system_metrics()
+            await websocket.send_json(metrics)
+            await asyncio.sleep(2.0)
+    except Exception as e:
+        print(f"WS error: {e}")
+`;
+
+  const mockReadme = `# Stock Terminal Dashboard
+
+Backend: FastAPI python with WebSocket live streaming.
+Frontend: React 19 with Tailwind CSS and lightweight-charts.
+
+## Dev Command
+\`npm run dev\` to start dev server on port 5173.
+`;
+
+  const getEditorContent = () => {
+    switch (activeFile) {
+      case 'config.json':
+        return `<pre class="font-mono text-xs p-4 leading-relaxed">${highlightJson(generateConfigJson())}</pre>`;
+      case 'App.tsx':
+        return `<pre class="font-mono text-xs p-4 leading-relaxed">${highlightJs(mockAppCode)}</pre>`;
+      case 'Chart.tsx':
+        return `<pre class="font-mono text-xs p-4 leading-relaxed">${highlightJs(mockChartCode)}</pre>`;
+      case 'main.py':
+        return `<pre class="font-mono text-xs p-4 leading-relaxed">${highlightPy(mockPyCode)}</pre>`;
+      case 'README.md':
+        return `<pre class="font-mono text-xs p-4 leading-relaxed text-blue-300">${mockReadme}</pre>`;
+      default:
+        return `<pre class="font-mono text-xs p-4 leading-relaxed">{\n  "status": "active"\n}</pre>`;
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#1e1e1e] text-[#d4d4d4] flex flex-col select-none font-sans overflow-hidden">
+      {/* Title Bar */}
+      <div className="h-8 bg-[#1e1e1e] border-b border-[#2d2d2d] flex items-center justify-between px-3 text-xs text-[#8c8c8c]">
+        <div className="flex items-center space-x-2">
+          <div className="flex space-x-1.5 mr-2">
+            <div onClick={onClose} className="w-3 h-3 rounded-full bg-[#ff5f56] flex items-center justify-center cursor-pointer group hover:bg-[#ff5f56]/80">
+              <span className="text-[7px] text-[#4c0002] opacity-0 group-hover:opacity-100 font-bold">×</span>
+            </div>
+            <div className="w-3 h-3 rounded-full bg-[#ffbd2e]"></div>
+            <div className="w-3 h-3 rounded-full bg-[#27c93f]"></div>
+          </div>
+          <span className="truncate">{activeFile} - stock-terminal - Visual Studio Code</span>
+        </div>
+        <div className="hidden md:flex items-center bg-[#2d2d2d] border border-[#3c3c3c] rounded px-6 py-0.5 text-[#a6a6a6] w-96 justify-center space-x-1.5 cursor-pointer">
+          <Search className="w-3 h-3 text-[#a6a6a6]" />
+          <span>stock-terminal</span>
+        </div>
+        <div className="flex items-center space-x-3 text-[10px] md:text-xs">
+          <span>Go</span>
+          <span>Run</span>
+          <span>Terminal</span>
+          <span>Help</span>
+        </div>
+      </div>
+
+      <div className="flex-1 flex overflow-hidden">
+        {/* Activity Bar */}
+        <div className="w-12 bg-[#181818] border-r border-[#2d2d2d] flex flex-col items-center py-2 justify-between">
+          <div className="flex flex-col items-center space-y-4 w-full">
+            <div className="w-full flex justify-center border-l-2 border-blue-500 py-1 text-white cursor-pointer">
+              <Files className="w-6 h-6" />
+            </div>
+            <div className="text-[#858585] hover:text-white cursor-pointer">
+              <Search className="w-6 h-6" />
+            </div>
+            <div className="text-[#858585] hover:text-white cursor-pointer">
+              <GitBranch className="w-6 h-6" />
+            </div>
+            <div className="text-[#858585] hover:text-white cursor-pointer">
+              <Play className="w-6 h-6" />
+            </div>
+          </div>
+          <div className="text-[#858585] hover:text-white cursor-pointer">
+            <Settings className="w-5 h-5" />
+          </div>
+        </div>
+
+        {/* Sidebar */}
+        <div className="w-56 bg-[#252526] border-r border-[#2d2d2d] flex flex-col text-xs text-[#cccccc] overflow-auto">
+          <div className="p-3 text-[11px] font-bold uppercase tracking-wider text-[#858585]">
+            Explorer: STOCK-TERMINAL
+          </div>
+          
+          <div className="flex-1 flex flex-col py-1">
+            <div className="flex items-center px-3 py-1 bg-[#2a2a2b] font-semibold">
+              <ChevronDown className="w-3 h-3 mr-1 text-[#858585]" />
+              <span className="truncate">STOCK-TERMINAL</span>
+            </div>
+
+            <div className="pl-3">
+              <div onClick={() => toggleFolder('backend')} className="flex items-center px-3 py-1 hover:bg-[#2a2a2b] cursor-pointer">
+                {openFolders.backend ? <ChevronDown className="w-3 h-3 mr-1 text-[#858585]" /> : <ChevronRight className="w-3 h-3 mr-1 text-[#858585]" />}
+                <Folder className="w-3.5 h-3.5 mr-1.5 text-blue-400" />
+                <span>backend</span>
+              </div>
+              {openFolders.backend && (
+                <div className="pl-6">
+                  <div onClick={() => setActiveFile('main.py')} className={`flex items-center px-3 py-1 hover:bg-[#2a2a2b] cursor-pointer ${activeFile === 'main.py' ? 'bg-[#37373d] text-white' : ''}`}>
+                    <File className="w-3.5 h-3.5 mr-1.5 text-blue-300" />
+                    <span>main.py</span>
+                  </div>
+                </div>
+              )}
+
+              <div onClick={() => toggleFolder('src')} className="flex items-center px-3 py-1 hover:bg-[#2a2a2b] cursor-pointer">
+                {openFolders.src ? <ChevronDown className="w-3 h-3 mr-1 text-[#858585]" /> : <ChevronRight className="w-3 h-3 mr-1 text-[#858585]" />}
+                <Folder className="w-3.5 h-3.5 mr-1.5 text-yellow-400" />
+                <span>src</span>
+              </div>
+              {openFolders.src && (
+                <div className="pl-6">
+                  <div onClick={() => toggleFolder('components')} className="flex items-center px-3 py-1 hover:bg-[#2a2a2b] cursor-pointer">
+                    {openFolders.components ? <ChevronDown className="w-3 h-3 mr-1 text-[#858585]" /> : <ChevronRight className="w-3 h-3 mr-1 text-[#858585]" />}
+                    <Folder className="w-3.5 h-3.5 mr-1.5 text-yellow-400" />
+                    <span>components</span>
+                  </div>
+                  {openFolders.components && (
+                    <div className="pl-6">
+                      <div onClick={() => setActiveFile('Chart.tsx')} className={`flex items-center px-3 py-1 hover:bg-[#2a2a2b] cursor-pointer ${activeFile === 'Chart.tsx' ? 'bg-[#37373d] text-white' : ''}`}>
+                        <File className="w-3.5 h-3.5 mr-1.5 text-blue-300" />
+                        <span>Chart.tsx</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div onClick={() => setActiveFile('App.tsx')} className={`flex items-center px-3 py-1 hover:bg-[#2a2a2b] cursor-pointer ${activeFile === 'App.tsx' ? 'bg-[#37373d] text-white' : ''}`}>
+                    <File className="w-3.5 h-3.5 mr-1.5 text-blue-300" />
+                    <span>App.tsx</span>
+                  </div>
+                </div>
+              )}
+
+              <div onClick={() => setActiveFile('config.json')} className={`flex items-center px-3 py-1 hover:bg-[#2a2a2b] cursor-pointer ${activeFile === 'config.json' ? 'bg-[#37373d] text-white' : ''}`}>
+                <File className="w-3.5 h-3.5 mr-1.5 text-yellow-500" />
+                <span>config.json</span>
+              </div>
+              <div onClick={() => setActiveFile('README.md')} className={`flex items-center px-3 py-1 hover:bg-[#2a2a2b] cursor-pointer ${activeFile === 'README.md' ? 'bg-[#37373d] text-white' : ''}`}>
+                <File className="w-3.5 h-3.5 mr-1.5 text-sky-400" />
+                <span>README.md</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Editor Area */}
+        <div className="flex-1 flex flex-col bg-[#1e1e1e] overflow-hidden">
+          <div className="h-9 bg-[#2d2d2d] flex items-center border-b border-[#252526] overflow-x-auto text-xs text-[#969696]">
+            {['config.json', 'App.tsx', 'main.py', 'README.md', 'Chart.tsx'].includes(activeFile) && (
+              <div className="h-full flex items-center bg-[#1e1e1e] text-white border-t border-t-blue-500 px-4 space-x-2 border-r border-[#252526] cursor-pointer">
+                <span>{activeFile}</span>
+                <span onClick={(e) => { e.stopPropagation(); onClose(); }} className="text-[#969696] hover:text-white text-[10px]">×</span>
+              </div>
+            )}
+            <div className="flex-1"></div>
+            <div onClick={onClose} className="px-3 hover:text-white cursor-pointer" title="退出伪装模式">
+              <X className="w-4 h-4" />
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-auto custom-scrollbar relative">
+            <div className="absolute top-0 bottom-0 left-0 w-10 bg-[#1e1e1e] border-r border-[#2d2d2d] flex flex-col items-center pt-4 text-[#858585] font-mono text-[11px] select-none leading-relaxed">
+              {Array.from({ length: 45 }).map((_, i) => (
+                <div key={i}>{i + 1}</div>
+              ))}
+            </div>
+            <div 
+              className="pl-14 text-[#d4d4d4]" 
+              dangerouslySetInnerHTML={{ __html: getEditorContent() }}
+            />
+          </div>
+
+          <div className="h-44 border-t border-[#2d2d2d] bg-[#1e1e1e] flex flex-col">
+            <div className="h-8 bg-[#1e1e1e] border-b border-[#2d2d2d] flex items-center px-4 space-x-4 text-xs font-semibold text-[#969696]">
+              <span className="hover:text-white cursor-pointer">PROBLEMS</span>
+              <span className="hover:text-white cursor-pointer">OUTPUT</span>
+              <span className="hover:text-white cursor-pointer">DEBUG CONSOLE</span>
+              <span className="text-white border-b border-b-blue-500 pb-1 cursor-pointer">TERMINAL</span>
+            </div>
+            <div className="flex-1 p-3 font-mono text-xs text-green-400 overflow-auto bg-[#1e1e1e]">
+              <div>[vite] hot module replacement enabled</div>
+              <div>[info] dev server running on <span className="text-blue-400 underline">http://localhost:5173/</span></div>
+              <div>[info] backend websocket pipeline connected to ws://localhost:8000/ws/market</div>
+              <div className="text-gray-400">[data] pipeline bandwidth: {(Math.random() * 5 + 8).toFixed(1)} kb/s</div>
+              <div className="text-gray-400">[data] packets processed: {Math.floor(Math.random() * 200 + 400)}</div>
+              <div className="text-green-500">[OK] dev server check completed: no errors.</div>
+              <div className="text-yellow-400">[warn] deprecated API dependency detected in express mock.</div>
+              <div className="text-[#d4d4d4] flex items-center space-x-1.5 mt-1">
+                <span>user@stock-terminal % </span>
+                <span className="w-1.5 h-3.5 bg-[#d4d4d4] animate-pulse"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="h-5 bg-[#007acc] text-white flex items-center justify-between px-3 text-[11px]">
+        <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-1 hover:bg-[#1f8ad2] px-1 cursor-pointer">
+            <GitBranch className="w-3.5 h-3.5" />
+            <span>main*</span>
+          </div>
+          <span>0 ⊗ 0 ⚠</span>
+        </div>
+        <div className="flex items-center space-x-3">
+          <span>TypeScript JSX</span>
+          <span>Ln 12, Col 34</span>
+          <span>UTF-8</span>
+          <span>LF</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface AIAnalysisResult {
+  analysis: string;
+  support?: number | null;
+  resistance?: number | null;
+  winRate?: string | null;
+}
+
 export default function App() {
   const [stocks, setStocks] = useState<StockData[]>([]);
   const [connected, setConnected] = useState(false);
@@ -269,6 +645,19 @@ export default function App() {
   const [alertStream, setAlertStream] = useState<any[]>([]);
   const [fundFlow, setFundFlow] = useState<any>(null);
   const [sentiment, setSentiment] = useState<any>(null);
+  const [newsSummaries, setNewsSummaries] = useState<Record<string, { summary: string; sentiment: string }>>({});
+  const [isAnalyzingNews, setIsAnalyzingNews] = useState(false);
+  const [chartIndicators, setChartIndicators] = useState(() => {
+    const saved = localStorage.getItem('chart_indicators');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) {}
+    }
+    return { ma: true, macd: true, volume: true, vp: true };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('chart_indicators', JSON.stringify(chartIndicators));
+  }, [chartIndicators]);
 
   const [paperTrades, setPaperTrades] = useState<PaperTrade[]>(() => {
     const saved = localStorage.getItem('paper_trades');
@@ -790,6 +1179,15 @@ export default function App() {
       console.error("Failed to fetch sector stocks", e);
     }
   };
+
+  if (isBossMode) {
+    return (
+      <VSCodeMock 
+        stocks={stocks} 
+        onClose={() => setIsBossMode(false)} 
+      />
+    );
+  }
 
   return (
     <div className={`min-h-screen ${isBossMode ? 'bg-gray-950 grayscale' : 'bg-[var(--color-stock-bg)]'} text-white flex flex-col text-sm transition-all duration-300`}>
@@ -1365,6 +1763,47 @@ export default function App() {
                     {period.label}
                   </button>
                 ))}
+
+                {chartPeriod !== 'intraday' && (
+                  <div className="flex-1 flex items-center justify-end space-x-3 text-xs text-gray-400 pl-4 border-l border-gray-800">
+                    <label className="flex items-center space-x-1 cursor-pointer hover:text-white">
+                      <input 
+                        type="checkbox" 
+                        checked={chartIndicators.ma} 
+                        onChange={(e) => setChartIndicators((prev: any) => ({ ...prev, ma: e.target.checked }))} 
+                        className="rounded bg-black border-gray-700 text-blue-600 focus:ring-0 focus:ring-offset-0 w-3 h-3"
+                      />
+                      <span>均线</span>
+                    </label>
+                    <label className="flex items-center space-x-1 cursor-pointer hover:text-white">
+                      <input 
+                        type="checkbox" 
+                        checked={chartIndicators.volume} 
+                        onChange={(e) => setChartIndicators((prev: any) => ({ ...prev, volume: e.target.checked }))} 
+                        className="rounded bg-black border-gray-700 text-blue-600 focus:ring-0 focus:ring-offset-0 w-3 h-3"
+                      />
+                      <span>成交量</span>
+                    </label>
+                    <label className="flex items-center space-x-1 cursor-pointer hover:text-white">
+                      <input 
+                        type="checkbox" 
+                        checked={chartIndicators.macd} 
+                        onChange={(e) => setChartIndicators((prev: any) => ({ ...prev, macd: e.target.checked }))} 
+                        className="rounded bg-black border-gray-700 text-blue-600 focus:ring-0 focus:ring-offset-0 w-3 h-3"
+                      />
+                      <span>MACD</span>
+                    </label>
+                    <label className="flex items-center space-x-1 cursor-pointer hover:text-white">
+                      <input 
+                        type="checkbox" 
+                        checked={chartIndicators.vp} 
+                        onChange={(e) => setChartIndicators((prev: any) => ({ ...prev, vp: e.target.checked }))} 
+                        className="rounded bg-black border-gray-700 text-blue-600 focus:ring-0 focus:ring-offset-0 w-3 h-3"
+                      />
+                      <span>筹码</span>
+                    </label>
+                  </div>
+                )}
               </div>
               <div className={`p-0 relative ${chartPeriod === 'intraday' ? 'h-64' : 'h-96'}`}>
                 {isBossMode ? (
@@ -1399,8 +1838,10 @@ export default function App() {
                     ma20Data={chartPeriod !== 'intraday' ? ma20Data : undefined}
                     ma60Data={chartPeriod !== 'intraday' ? ma60Data : undefined}
                     ma120Data={chartPeriod !== 'intraday' ? ma120Data : undefined}
-                    macdData={chartPeriod !== 'intraday' && macdData ? macdData : undefined}                    supportPrice={aiAnalyses[selectedStock.symbol]?.support ?? undefined}
+                    macdData={chartPeriod !== 'intraday' && macdData ? macdData : undefined}
+                    supportPrice={aiAnalyses[selectedStock.symbol]?.support ?? undefined}
                     resistancePrice={aiAnalyses[selectedStock.symbol]?.resistance ?? undefined}
+                    visibleIndicators={chartIndicators}
                     colors={{
                       backgroundColor: 'transparent',
                       lineColor: selectedStock.changePercent >= 0 ? '#ff3b30' : '#34c759',
@@ -1506,6 +1947,60 @@ export default function App() {
                       {aiAnalyses[selectedStock.symbol]?.support && <span className="text-[var(--color-stock-red)]">支撑(防守): {aiAnalyses[selectedStock.symbol]?.support?.toFixed(2)}</span>}
                       {aiAnalyses[selectedStock.symbol]?.resistance && <span className="text-[var(--color-stock-green)]">压力(进攻): {aiAnalyses[selectedStock.symbol]?.resistance?.toFixed(2)}</span>}
                       <span className="text-blue-300 font-bold">胜率评级: {aiAnalyses[selectedStock.symbol]?.winRate}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* AI Announcement & News TL;DR (太长不看) */}
+                <div className="bg-indigo-900/10 border border-indigo-900/50 rounded-lg p-3 mb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-indigo-400 font-medium">📰 资讯/公告 AI 极速总结 (TL;DR)</span>
+                    <button 
+                      disabled={isAnalyzingNews} 
+                      onClick={async () => {
+                        if (!apiKey) { setShowSettings(true); return; }
+                        setIsAnalyzingNews(true);
+                        const currentSymbol = selectedStock.symbol;
+                        setNewsSummaries(prev => ({ 
+                          ...prev, 
+                          [currentSymbol]: { summary: '正在扫描全网资讯与公告，Gemini 分析中...', sentiment: 'NEUTRAL' } 
+                        }));
+                        try {
+                          const res = await fetch(`http://localhost:8000/api/news_summary?symbol=${currentSymbol}&name=${encodeURIComponent(selectedStock.name)}`, { 
+                            headers: { 'X-Gemini-Key': apiKey } 
+                          });
+                          const data = await res.json();
+                          setNewsSummaries(prev => ({ 
+                            ...prev, 
+                            [currentSymbol]: data.summary ? data : { summary: '极速总结失败，请重试。', sentiment: 'NEUTRAL' } 
+                          }));
+                        } catch (e) {
+                          setNewsSummaries(prev => ({ 
+                            ...prev, 
+                            [currentSymbol]: { summary: '网络错误，无法连接到分析引擎。', sentiment: 'NEUTRAL' } 
+                          }));
+                        } finally {
+                          setIsAnalyzingNews(false);
+                        }
+                      }}
+                      className="px-3 py-1 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded transition-colors disabled:opacity-50"
+                    >
+                      {isAnalyzingNews ? '扫描中...' : '极速总结'}
+                    </button>
+                  </div>
+                  <div className="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">
+                    {newsSummaries[selectedStock.symbol]?.summary || "点击「极速总结」，Gemini 将瞬间为您总结近期重大新闻、利空风险及关键公告。"}
+                  </div>
+                  {newsSummaries[selectedStock.symbol]?.sentiment && newsSummaries[selectedStock.symbol]?.summary && (
+                    <div className="mt-3 flex items-center space-x-2 text-xs">
+                      <span className="text-gray-500 font-mono">情感诊断:</span>
+                      <span className={`px-2 py-0.5 rounded font-bold font-mono ${
+                        newsSummaries[selectedStock.symbol].sentiment === 'POSITIVE' ? 'bg-[var(--color-stock-red)]/20 text-[var(--color-stock-red)]' :
+                        newsSummaries[selectedStock.symbol].sentiment === 'NEGATIVE' ? 'bg-[var(--color-stock-green)]/20 text-[var(--color-stock-green)]' :
+                        'bg-gray-800 text-gray-400'
+                      }`}>
+                        {newsSummaries[selectedStock.symbol].sentiment}
+                      </span>
                     </div>
                   )}
                 </div>
