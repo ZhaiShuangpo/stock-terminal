@@ -1383,18 +1383,36 @@ export default function App() {
                         <div className="col-span-full text-center text-gray-500 mt-20">正在拉取成分股数据...</div>
                       ) : (
                         sectorStocks.map((stock: any) => {
+                          const limits = (() => {
+                            const secName = selectedSector?.name || '';
+                            const growthSectors = ['半导体', '电子', '芯片', '消费电子', '软件', '计算机', '电池', '光伏', '医疗器械', '生物制品', '制药', '军工', '航天', '通信'];
+                            const cyclicalSectors = ['银行', '煤炭', '钢铁', '水泥', '房地产', '港口', '航运', '石油', '金属', '公路', '电力'];
+                            
+                            if (growthSectors.some(name => secName.includes(name))) {
+                              return { maxPe: 80, maxPb: 8.0 };
+                            }
+                            if (cyclicalSectors.some(name => secName.includes(name))) {
+                              return { maxPe: 12, maxPb: 1.2 };
+                            }
+                            return { maxPe: 40, maxPb: 4.5 };
+                          })();
+
+                          const maxPe = (stock.maxPe && stock.maxPe > 0) ? stock.maxPe : limits.maxPe;
+                          const maxPb = (stock.maxPb && stock.maxPb > 0) ? stock.maxPb : limits.maxPb;
+
                           const isResonance = 
-                            stock.pe > 0 && stock.pe < 40 && 
-                            stock.pb > 0 && stock.pb < 4.5 && 
+                            stock.pe > 0 && stock.pe < maxPe && 
+                            stock.pb > 0 && stock.pb < maxPb && 
                             stock.changePercent >= 2.0 && stock.changePercent <= 9.0 && 
                             stock.turnover >= 2.0 && stock.turnover < 18.0 && 
-                            stock.marketCap >= 50;
+                            stock.marketCap >= 50 &&
+                            stock.maBullish &&
+                            stock.pocBreakout;
 
                           let borderClass = isResonance ? 'border-yellow-600/50' : 'border-gray-800';
 
                           return (
                             <div key={stock.symbol} onClick={() => {
-                              // Optionally add to tracking and open chart
                               const newStock = { symbol: stock.symbol, code: stock.code, name: stock.name, price: stock.price, high: stock.high, low: stock.low, change: stock.change, changePercent: stock.changePercent, volume: stock.volume, amount: stock.amount, pe: stock.pe, pb: stock.pb, marketCap: stock.marketCap, turnover: stock.turnover, trend: [] } as StockData;
                               setStocks(prev => prev.some(s => s.symbol === stock.symbol) ? prev : [newStock, ...prev]);
                               setSelectedStock(newStock);
@@ -1414,11 +1432,18 @@ export default function App() {
                                   <div className={`text-xs font-mono ${getColorClass(stock.changePercent)}`}>{stock.changePercent > 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%</div>
                                 </div>
                               </div>
-                              <div className="flex items-center space-x-3 text-[10px] text-gray-500 border-t border-gray-800/50 pt-2 mt-1">
+                              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-gray-500 border-t border-gray-800/50 pt-2 mt-1">
                                 <span>PE: {stock.pe > 0 ? stock.pe.toFixed(1) : '-'}</span>
                                 <span>PB: {stock.pb > 0 ? stock.pb.toFixed(2) : '-'}</span>
                                 <span>换手: {stock.turnover > 0 ? `${stock.turnover.toFixed(1)}%` : '-'}</span>
                                 <span>市值: {(stock.marketCap || 0).toFixed(0)}亿</span>
+                                {stock.netProfitGrowth !== undefined && stock.netProfitGrowth !== 0 && (
+                                  <span className={stock.netProfitGrowth > 0 ? 'text-red-400' : 'text-green-400'}>
+                                    利润: {stock.netProfitGrowth > 0 ? '+' : ''}{stock.netProfitGrowth.toFixed(1)}%
+                                  </span>
+                                )}
+                                {stock.maBullish && <span className="text-yellow-500/80">均线多头</span>}
+                                {stock.pocBreakout && <span className="text-purple-400/80">筹码突破</span>}
                               </div>
                             </div>
                           );
@@ -1504,7 +1529,13 @@ export default function App() {
                         <div className="col-span-full text-center text-gray-500 mt-20">正在拉取板块数据...</div>
                       ) : (
                         sectors.sort((a, b) => b.changePercent - a.changePercent).map((sec, idx) => {
-                          const isAmbushSector = sec.change20d <= -5.0 && sec.change5d > 0.0 && sec.change5d < 4.0 && sec.changePercent >= -1.0;
+                          const isAmbushSector = 
+                            sec.change20d <= -5.0 && 
+                            sec.change5d > 0.0 && 
+                            sec.change5d < 4.0 && 
+                            sec.changePercent >= -1.0 &&
+                            sec.volRatio < 0.8 &&
+                            sec.fundFlow > 0;
                           const borderClass = isAmbushSector ? 'border-purple-600/50' : 'border-gray-800';
 
                           return (
@@ -1519,14 +1550,26 @@ export default function App() {
                               <div className={`text-2xl font-mono font-bold ${getColorClass(sec.changePercent)}`}>
                                 {sec.changePercent > 0 ? '+' : ''}{sec.changePercent.toFixed(2)}%
                               </div>
-                              <div className="flex space-x-3 mt-2 text-xs font-mono">
+                              <div className="flex space-x-3 mt-2 text-xs font-mono justify-center flex-wrap gap-y-1">
                                 <div className="flex flex-col items-center">
-                                  <span className="text-gray-600 mb-0.5">5日</span>
+                                  <span className="text-gray-600 text-[10px] mb-0.5">5日</span>
                                   <span className={getColorClass(sec.change5d)}>{sec.change5d > 0 ? '+' : ''}{sec.change5d.toFixed(2)}%</span>
                                 </div>
                                 <div className="flex flex-col items-center">
-                                  <span className="text-gray-600 mb-0.5">20日</span>
+                                  <span className="text-gray-600 text-[10px] mb-0.5">20日</span>
                                   <span className={getColorClass(sec.change20d)}>{sec.change20d > 0 ? '+' : ''}{sec.change20d.toFixed(2)}%</span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                  <span className="text-gray-600 text-[10px] mb-0.5">主力</span>
+                                  <span className={sec.fundFlow > 0 ? 'text-red-500' : 'text-green-500'}>
+                                    {sec.fundFlow > 0 ? '+' : ''}{(sec.fundFlow || 0).toFixed(1)}亿
+                                  </span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                  <span className="text-gray-600 text-[10px] mb-0.5">量能比</span>
+                                  <span className={sec.volRatio < 0.8 ? 'text-purple-400 font-bold' : 'text-gray-400'}>
+                                    {sec.volRatio ? sec.volRatio.toFixed(2) : '-'}
+                                  </span>
                                 </div>
                               </div>
                             </div>

@@ -43,12 +43,65 @@ stock_states: Dict[str, dict] = {}
 
 import json
 
+sector_volume_ratios: Dict[str, float] = {}
+
+async def update_sector_volume_loop():
+    global http_client, sector_volume_ratios
+    await asyncio.sleep(2)
+    while True:
+        try:
+            print("Background updating sector volume ratios...")
+            url = "http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=80&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:2+f:!50&fields=f12"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = await http_client.get(url, headers=headers, timeout=5.0)
+            data = response.json()
+            if "data" in data and "diff" in data["data"]:
+                sector_ids = [item.get("f12") for item in data["data"]["diff"] if item.get("f12")]
+                
+                async def get_ratio(sec_id):
+                    kline_url = f"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=90.{sec_id}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=25"
+                    try:
+                        r = await http_client.get(kline_url, headers=headers, timeout=3.0)
+                        res = r.json()
+                        if "data" in res and "klines" in res["data"]:
+                            klines = res["data"]["klines"]
+                            if len(klines) >= 20:
+                                amounts = []
+                                for kl in klines:
+                                    parts = kl.split(',')
+                                    if len(parts) > 6:
+                                        try:
+                                            amounts.append(float(parts[6]))
+                                        except:
+                                            pass
+                                if len(amounts) >= 20:
+                                    amt_5 = sum(amounts[-5:]) / 5.0
+                                    amt_20 = sum(amounts[-20:]) / 20.0
+                                    if amt_20 > 0:
+                                        return sec_id, amt_5 / amt_20
+                    except Exception:
+                        pass
+                    return sec_id, 1.0
+
+                for i in range(0, len(sector_ids), 10):
+                    chunk = sector_ids[i:i+10]
+                    tasks = [get_ratio(sid) for sid in chunk]
+                    results = await asyncio.gather(*tasks)
+                    for sid, ratio in results:
+                        sector_volume_ratios[sid] = ratio
+                    await asyncio.sleep(0.1)
+                print(f"Background updated {len(sector_volume_ratios)} sector volume ratios.")
+            await asyncio.sleep(300)
+        except Exception as e:
+            print(f"Background sector volume ratios error: {e}")
+            await asyncio.sleep(60)
+
 async def fetch_sectors():
-    global http_client, cached_sectors, last_sectors_fetch_time
+    global http_client, cached_sectors, last_sectors_fetch_time, sector_volume_ratios
     now = time.time()
     if cached_sectors and (now - last_sectors_fetch_time < 15):
         return cached_sectors
-    url = "http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=80&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:2+f:!50&fields=f12,f14,f3,f109,f110"
+    url = "http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=80&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:2+f:!50&fields=f12,f14,f3,f109,f110,f62"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         response = await http_client.get(url, headers=headers, timeout=3.0)
@@ -56,12 +109,18 @@ async def fetch_sectors():
         sectors = []
         if "data" in data and "diff" in data["data"]:
             for item in data["data"]["diff"]:
+                sec_id = str(item.get("f12", ""))
+                fund_flow_raw = float(item.get("f62", 0.0) or 0.0)
+                fund_flow = fund_flow_raw / 100000000.0
+                vol_ratio = sector_volume_ratios.get(sec_id, 1.0)
                 sectors.append({
-                    "id": str(item.get("f12", "")),
+                    "id": sec_id,
                     "name": str(item.get("f14", "")),
                     "changePercent": float(item.get("f3", 0.0) or 0.0),
                     "change5d": float(item.get("f109", 0.0) or 0.0),
-                    "change20d": float(item.get("f110", 0.0) or 0.0)
+                    "change20d": float(item.get("f110", 0.0) or 0.0),
+                    "volRatio": vol_ratio,
+                    "fundFlow": fund_flow
                 })
         cached_sectors = sectors
         last_sectors_fetch_time = now
@@ -69,6 +128,7 @@ async def fetch_sectors():
     except Exception as e:
         print("Fetch sectors error:", e)
         return cached_sectors or []
+
 
 async def fetch_indices():
     global http_client, cached_indices, last_indices_fetch_time
@@ -328,17 +388,79 @@ async def fundflow_stock(symbol: str):
 @app.get("/api/sector/{sector_id}")
 async def get_sector_stocks(sector_id: str):
     global http_client
-    # Fetch constituent stocks for a given sector from EastMoney
-    url = f"http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=40&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:{sector_id}&fields=f12,f14,f2,f3,f4,f5,f6,f15,f16,f1,f9,f23,f21,f8"
+    # Fetch constituent stocks with PE, PB, MarketCap, Turnover, net profit growth (f185), revenue growth (f186)
+    url = f"http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=40&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:{sector_id}&fields=f12,f14,f2,f3,f4,f5,f6,f15,f16,f1,f9,f23,f21,f8,f185,f186"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         response = await http_client.get(url, headers=headers, timeout=5.0)
         data = response.json()
         results = []
         if "data" in data and "diff" in data["data"]:
-            for item in data["data"]["diff"]:
+            diff_list = data["data"]["diff"]
+            
+            async def enrich_stock_kline(item):
                 market_code = "sh" if item.get("f1") == 1 else "sz"
                 code = item.get("f12", "")
+                symbol = f"{market_code}{code}"
+                
+                ma_bullish = False
+                poc_breakout = True
+                
+                kline_url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,70,qfq"
+                try:
+                    r = await http_client.get(kline_url, timeout=2.0)
+                    k_data = r.json()
+                    if k_data.get("code") == 0 and symbol in k_data.get("data", {}):
+                        stock_data = k_data["data"][symbol]
+                        kline_key = "qfqday" if "qfqday" in stock_data else "day"
+                        if kline_key in stock_data:
+                            klines = stock_data[kline_key]
+                            if len(klines) >= 50:
+                                closes = [float(k[2]) for k in klines]
+                                highs = [float(k[3]) for k in klines]
+                                lows = [float(k[4]) for k in klines]
+                                
+                                current_price = float(klines[-1][2])
+                                
+                                ma5 = sum(closes[-5:]) / 5.0
+                                ma10 = sum(closes[-10:]) / 10.0
+                                ma20 = sum(closes[-20:]) / 20.0
+                                ma60 = sum(closes[-60:]) / 60.0 if len(closes) >= 60 else 0.0
+                                
+                                if current_price > ma20 and ma5 > ma10:
+                                    if ma60 == 0.0 or ma20 > ma60:
+                                        ma_bullish = True
+                                
+                                h_max = max(highs[-50:])
+                                l_min = min(lows[-50:])
+                                if h_max > l_min:
+                                    bin_width = (h_max - l_min) / 20.0
+                                    bins = [0.0] * 20
+                                    for k in klines[-50:]:
+                                        c = float(k[2])
+                                        v = float(k[5])
+                                        bin_idx = int((c - l_min) / bin_width)
+                                        if bin_idx >= 20:
+                                            bin_idx = 19
+                                        elif bin_idx < 0:
+                                            bin_idx = 0
+                                        bins[bin_idx] += v
+                                    
+                                    poc_idx = bins.index(max(bins))
+                                    poc_high = l_min + (poc_idx + 1) * bin_width
+                                    poc_breakout = current_price >= poc_high
+                except Exception:
+                    pass
+                return symbol, ma_bullish, poc_breakout
+
+            enrich_tasks = [enrich_stock_kline(item) for item in diff_list]
+            enrich_results = await asyncio.gather(*enrich_tasks)
+            enrich_map = {r[0]: (r[1], r[2]) for r in enrich_results}
+
+            for item in diff_list:
+                market_code = "sh" if item.get("f1") == 1 else "sz"
+                code = item.get("f12", "")
+                symbol = f"{market_code}{code}"
                 
                 try:
                     pe = float(item.get("f9") or 0.0)
@@ -356,9 +478,26 @@ async def get_sector_stocks(sector_id: str):
                     turnover = float(item.get("f8") or 0.0)
                 except:
                     turnover = 0.0
-                    
+                try:
+                    netProfitGrowth = float(item.get("f185") or 0.0)
+                except:
+                    netProfitGrowth = 0.0
+                try:
+                    revenueGrowth = float(item.get("f186") or 0.0)
+                except:
+                    revenueGrowth = 0.0
+                
+                if revenueGrowth > 20.0 or netProfitGrowth > 15.0:
+                    maxPe, maxPb = 80.0, 8.0
+                elif netProfitGrowth <= 0.0:
+                    maxPe, maxPb = 12.0, 1.2
+                else:
+                    maxPe, maxPb = 0.0, 0.0
+
+                ma_bullish, poc_breakout = enrich_map.get(symbol, (False, True))
+
                 results.append({
-                    "symbol": f"{market_code}{code}",
+                    "symbol": symbol,
                     "code": code,
                     "name": item.get("f14", ""),
                     "price": float(item.get("f2", 0.0) or 0.0),
@@ -371,12 +510,19 @@ async def get_sector_stocks(sector_id: str):
                     "pe": pe,
                     "pb": pb,
                     "marketCap": marketCap,
-                    "turnover": turnover
+                    "turnover": turnover,
+                    "netProfitGrowth": netProfitGrowth,
+                    "revenueGrowth": revenueGrowth,
+                    "maxPe": maxPe,
+                    "maxPb": maxPb,
+                    "maBullish": ma_bullish,
+                    "pocBreakout": poc_breakout
                 })
         return {"data": results}
     except Exception as e:
         print(f"Sector fetch error: {e}")
         return {"data": []}
+
 
 async def get_kline_data(symbol: str, period: str = "day", limit: int = 100):
     global http_client
@@ -873,6 +1019,8 @@ async def startup_event():
     global http_client
     http_client = httpx.AsyncClient(timeout=5.0)
     asyncio.create_task(update_sentiment_loop())
+    asyncio.create_task(update_sector_volume_loop())
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
