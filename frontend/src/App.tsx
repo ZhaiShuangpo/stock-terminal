@@ -1383,23 +1383,14 @@ export default function App() {
                         <div className="col-span-full text-center text-gray-500 mt-20">正在拉取成分股数据...</div>
                       ) : (
                         sectorStocks.map((stock: any) => {
-                          const isAmbush = 
-                            stock.pe > 0 && stock.pe < 18 && 
-                            stock.pb > 0 && stock.pb < 1.8 && 
-                            stock.changePercent >= -1.5 && stock.changePercent <= 1.5 && 
-                            stock.turnover > 0.3 && stock.turnover < 2.0 && 
-                            stock.marketCap >= 80;
-                          
                           const isResonance = 
-                            stock.pe > 0 && stock.pe < 35 && 
-                            stock.pb > 0 && stock.pb < 3.5 && 
-                            stock.changePercent >= 2.5 && stock.changePercent < 8.0 && 
-                            stock.turnover >= 3.0 && stock.turnover < 15.0 && 
-                            stock.marketCap >= 80;
+                            stock.pe > 0 && stock.pe < 40 && 
+                            stock.pb > 0 && stock.pb < 4.5 && 
+                            stock.changePercent >= 2.0 && stock.changePercent <= 9.0 && 
+                            stock.turnover >= 2.0 && stock.turnover < 18.0 && 
+                            stock.marketCap >= 50;
 
-                          let borderClass = 'border-gray-800';
-                          if (isResonance) borderClass = 'border-yellow-600/50';
-                          else if (isAmbush) borderClass = 'border-purple-600/50';
+                          let borderClass = isResonance ? 'border-yellow-600/50' : 'border-gray-800';
 
                           return (
                             <div key={stock.symbol} onClick={() => {
@@ -1409,14 +1400,12 @@ export default function App() {
                               setSelectedStock(newStock);
                             }} className={`bg-gray-900 border ${borderClass} rounded-lg p-3 flex flex-col justify-between hover:border-gray-600 transition-colors cursor-pointer group relative overflow-hidden`}>
                               {isResonance && <div className="absolute top-0 right-0 bg-gradient-to-l from-yellow-600/20 to-transparent w-16 h-full pointer-events-none"></div>}
-                              {isAmbush && <div className="absolute top-0 right-0 bg-gradient-to-l from-purple-600/20 to-transparent w-16 h-full pointer-events-none"></div>}
                               
                               <div className="flex justify-between items-start mb-2">
                                 <div>
                                   <div className="text-gray-200 font-bold group-hover:text-white transition-colors flex items-center space-x-2">
                                     <span>{stock.name}</span>
                                     {isResonance && <span className="text-[10px] bg-yellow-500/20 text-yellow-500 px-1 py-0.5 rounded font-bold border border-yellow-500/30">⭐ 共振首选</span>}
-                                    {isAmbush && <span className="text-[10px] bg-purple-500/20 text-purple-400 px-1 py-0.5 rounded font-bold border border-purple-500/30">🎯 左侧埋伏</span>}
                                   </div>
                                   <div className="text-xs text-gray-500 font-mono mt-0.5">{stock.code}</div>
                                 </div>
@@ -1514,30 +1503,35 @@ export default function App() {
                       {sectors.length === 0 ? (
                         <div className="col-span-full text-center text-gray-500 mt-20">正在拉取板块数据...</div>
                       ) : (
-                        sectors.sort((a, b) => b.changePercent - a.changePercent).map((sec, idx) => (
-                          <div key={sec.name} onClick={() => handleSectorClick(sec)} className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col items-center justify-center hover:border-gray-600 transition-colors relative overflow-hidden cursor-pointer">
-                            {idx < 3 && <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-red-500 to-orange-500"></div>}
-                            
-                            {sec.change20d < 0 && sec.change5d > 0 && (
-                              <div className="absolute top-2 right-2 bg-yellow-500/20 text-yellow-500 text-[10px] px-1.5 py-0.5 rounded font-bold border border-yellow-500/30 shadow-sm shadow-yellow-500/10">⭐左侧潜伏</div>
-                            )}
+                        sectors.sort((a, b) => b.changePercent - a.changePercent).map((sec, idx) => {
+                          const isAmbushSector = sec.change20d <= -5.0 && sec.change5d > 0.0 && sec.change5d < 4.0 && sec.changePercent >= -1.0;
+                          const borderClass = isAmbushSector ? 'border-purple-600/50' : 'border-gray-800';
 
-                            <div className="text-gray-300 font-bold mb-2 text-lg">{sec.name}</div>
-                            <div className={`text-2xl font-mono font-bold ${getColorClass(sec.changePercent)}`}>
-                              {sec.changePercent > 0 ? '+' : ''}{sec.changePercent.toFixed(2)}%
-                            </div>
-                            <div className="flex space-x-3 mt-2 text-xs font-mono">
-                              <div className="flex flex-col items-center">
-                                <span className="text-gray-600 mb-0.5">5日</span>
-                                <span className={getColorClass(sec.change5d)}>{sec.change5d > 0 ? '+' : ''}{sec.change5d.toFixed(2)}%</span>
+                          return (
+                            <div key={sec.name} onClick={() => handleSectorClick(sec)} className={`bg-gray-900 border ${borderClass} rounded-lg p-4 flex flex-col items-center justify-center hover:border-gray-600 transition-colors relative overflow-hidden cursor-pointer`}>
+                              {idx < 3 && <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-red-500 to-orange-500"></div>}
+                              {isAmbushSector && <div className="absolute top-0 right-0 bg-gradient-to-l from-purple-600/20 to-transparent w-16 h-full pointer-events-none"></div>}
+                              {isAmbushSector && (
+                                <div className="absolute top-2 right-2 bg-purple-500/20 text-purple-400 text-[10px] px-1.5 py-0.5 rounded font-bold border border-purple-500/30 shadow-sm shadow-purple-500/10">🎯 左侧埋伏</div>
+                              )}
+
+                              <div className="text-gray-300 font-bold mb-2 text-lg">{sec.name}</div>
+                              <div className={`text-2xl font-mono font-bold ${getColorClass(sec.changePercent)}`}>
+                                {sec.changePercent > 0 ? '+' : ''}{sec.changePercent.toFixed(2)}%
                               </div>
-                              <div className="flex flex-col items-center">
-                                <span className="text-gray-600 mb-0.5">20日</span>
-                                <span className={getColorClass(sec.change20d)}>{sec.change20d > 0 ? '+' : ''}{sec.change20d.toFixed(2)}%</span>
+                              <div className="flex space-x-3 mt-2 text-xs font-mono">
+                                <div className="flex flex-col items-center">
+                                  <span className="text-gray-600 mb-0.5">5日</span>
+                                  <span className={getColorClass(sec.change5d)}>{sec.change5d > 0 ? '+' : ''}{sec.change5d.toFixed(2)}%</span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                  <span className="text-gray-600 mb-0.5">20日</span>
+                                  <span className={getColorClass(sec.change20d)}>{sec.change20d > 0 ? '+' : ''}{sec.change20d.toFixed(2)}%</span>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                   </div>
