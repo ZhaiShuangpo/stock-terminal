@@ -1383,21 +1383,40 @@ export default function App() {
                         <div className="col-span-full text-center text-gray-500 mt-20">正在拉取成分股数据...</div>
                       ) : (
                         sectorStocks.map((stock: any) => {
-                          const isResonance = stock.pe > 0 && stock.pe < 25 && stock.pb > 0 && stock.pb < 3 && stock.changePercent > 0;
+                          const isAmbush = 
+                            stock.pe > 0 && stock.pe < 18 && 
+                            stock.pb > 0 && stock.pb < 1.8 && 
+                            stock.changePercent >= -1.5 && stock.changePercent <= 1.5 && 
+                            stock.turnover > 0.3 && stock.turnover < 2.0 && 
+                            stock.marketCap >= 80;
+                          
+                          const isResonance = 
+                            stock.pe > 0 && stock.pe < 35 && 
+                            stock.pb > 0 && stock.pb < 3.5 && 
+                            stock.changePercent >= 2.5 && stock.changePercent < 8.0 && 
+                            stock.turnover >= 3.0 && stock.turnover < 15.0 && 
+                            stock.marketCap >= 80;
+
+                          let borderClass = 'border-gray-800';
+                          if (isResonance) borderClass = 'border-yellow-600/50';
+                          else if (isAmbush) borderClass = 'border-purple-600/50';
+
                           return (
                             <div key={stock.symbol} onClick={() => {
                               // Optionally add to tracking and open chart
-                              const newStock = { symbol: stock.symbol, code: stock.code, name: stock.name, price: stock.price, high: stock.high, low: stock.low, change: stock.change, changePercent: stock.changePercent, volume: stock.volume, amount: stock.amount, pe: stock.pe, pb: stock.pb, marketCap: stock.marketCap, trend: [] } as StockData;
+                              const newStock = { symbol: stock.symbol, code: stock.code, name: stock.name, price: stock.price, high: stock.high, low: stock.low, change: stock.change, changePercent: stock.changePercent, volume: stock.volume, amount: stock.amount, pe: stock.pe, pb: stock.pb, marketCap: stock.marketCap, turnover: stock.turnover, trend: [] } as StockData;
                               setStocks(prev => prev.some(s => s.symbol === stock.symbol) ? prev : [newStock, ...prev]);
                               setSelectedStock(newStock);
-                            }} className={`bg-gray-900 border ${isResonance ? 'border-yellow-600/50' : 'border-gray-800'} rounded-lg p-3 flex flex-col justify-between hover:border-gray-600 transition-colors cursor-pointer group relative overflow-hidden`}>
+                            }} className={`bg-gray-900 border ${borderClass} rounded-lg p-3 flex flex-col justify-between hover:border-gray-600 transition-colors cursor-pointer group relative overflow-hidden`}>
                               {isResonance && <div className="absolute top-0 right-0 bg-gradient-to-l from-yellow-600/20 to-transparent w-16 h-full pointer-events-none"></div>}
+                              {isAmbush && <div className="absolute top-0 right-0 bg-gradient-to-l from-purple-600/20 to-transparent w-16 h-full pointer-events-none"></div>}
                               
                               <div className="flex justify-between items-start mb-2">
                                 <div>
                                   <div className="text-gray-200 font-bold group-hover:text-white transition-colors flex items-center space-x-2">
                                     <span>{stock.name}</span>
                                     {isResonance && <span className="text-[10px] bg-yellow-500/20 text-yellow-500 px-1 py-0.5 rounded font-bold border border-yellow-500/30">⭐ 共振首选</span>}
+                                    {isAmbush && <span className="text-[10px] bg-purple-500/20 text-purple-400 px-1 py-0.5 rounded font-bold border border-purple-500/30">🎯 左侧埋伏</span>}
                                   </div>
                                   <div className="text-xs text-gray-500 font-mono mt-0.5">{stock.code}</div>
                                 </div>
@@ -1409,6 +1428,7 @@ export default function App() {
                               <div className="flex items-center space-x-3 text-[10px] text-gray-500 border-t border-gray-800/50 pt-2 mt-1">
                                 <span>PE: {stock.pe > 0 ? stock.pe.toFixed(1) : '-'}</span>
                                 <span>PB: {stock.pb > 0 ? stock.pb.toFixed(2) : '-'}</span>
+                                <span>换手: {stock.turnover > 0 ? `${stock.turnover.toFixed(1)}%` : '-'}</span>
                                 <span>市值: {(stock.marketCap || 0).toFixed(0)}亿</span>
                               </div>
                             </div>

@@ -329,7 +329,7 @@ async def fundflow_stock(symbol: str):
 async def get_sector_stocks(sector_id: str):
     global http_client
     # Fetch constituent stocks for a given sector from EastMoney
-    url = f"http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=40&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:{sector_id}&fields=f12,f14,f2,f3,f4,f5,f6,f15,f16,f1,f9,f23,f21"
+    url = f"http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=40&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:{sector_id}&fields=f12,f14,f2,f3,f4,f5,f6,f15,f16,f1,f9,f23,f21,f8"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         response = await http_client.get(url, headers=headers, timeout=5.0)
@@ -352,6 +352,10 @@ async def get_sector_stocks(sector_id: str):
                     marketCap = float(item.get("f21") or 0.0) / 100000000
                 except:
                     marketCap = 0.0
+                try:
+                    turnover = float(item.get("f8") or 0.0)
+                except:
+                    turnover = 0.0
                     
                 results.append({
                     "symbol": f"{market_code}{code}",
@@ -366,7 +370,8 @@ async def get_sector_stocks(sector_id: str):
                     "low": float(item.get("f16", 0.0) or 0.0),
                     "pe": pe,
                     "pb": pb,
-                    "marketCap": marketCap
+                    "marketCap": marketCap,
+                    "turnover": turnover
                 })
         return {"data": results}
     except Exception as e:
