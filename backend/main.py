@@ -44,57 +44,144 @@ stock_states: Dict[str, dict] = {}
 import json
 
 sector_volume_ratios: Dict[str, float] = {}
+kline_semaphore = asyncio.Semaphore(40)
+
+async def fetch_kline_from_sina(symbol: str, period: str = "day", limit: int = 100):
+    global http_client
+    if not (symbol.startswith("sh") or symbol.startswith("sz")):
+        symbol = f"sh{symbol}" if symbol.startswith("6") else f"sz{symbol}"
+        
+    scale_map = {
+        "day": 240,
+        "week": 1200,
+        "month": 7200
+    }
+    scale = scale_map.get(period, 240)
+    url = f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol={symbol}&scale={scale}&ma=no&datalen={limit}"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    try:
+        response = await http_client.get(url, headers=headers, timeout=5.0)
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list):
+                klines = []
+                for item in data:
+                    klines.append([
+                        item.get("day", ""),
+                        float(item.get("open", 0.0) or 0.0),
+                        float(item.get("close", 0.0) or 0.0),
+                        float(item.get("high", 0.0) or 0.0),
+                        float(item.get("low", 0.0) or 0.0),
+                        float(item.get("volume", 0.0) or 0.0) / 100.0
+                    ])
+                return klines
+    except Exception as e:
+        print(f"Error fetching Sina K-line for {symbol}: {e}")
+    return None
+
+async def calculate_sector_volume_ratio_by_constituents(sector_id: str) -> float:
+    global http_client
+    url = f"http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=40&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:{sector_id}&fields=f12,f13"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        response = await http_client.get(url, headers=headers, timeout=5.0)
+        data = response.json()
+        if "data" not in data or "diff" not in data["data"]:
+            return 1.0
+        
+        diff_list = data["data"]["diff"]
+        symbols = []
+        for item in diff_list:
+            market_code = "sh" if item.get("f13") == 1 else "sz"
+            code = item.get("f12", "")
+            symbols.append(f"{market_code}{code}")
+        
+        if not symbols:
+            return 1.0
+            
+        async def fetch_kline(symbol):
+            async with kline_semaphore:
+                try:
+                    res = await fetch_kline_from_sina(symbol, "day", 30)
+                    if res:
+                        return symbol, res
+                except Exception:
+                    pass
+                return symbol, None
+            
+        tasks = [fetch_kline(sym) for sym in symbols]
+        kline_results = await asyncio.gather(*tasks)
+        
+        daily_amounts = {}
+        for sym, klines in kline_results:
+            if not klines: continue
+            for k in klines:
+                dt = k[0]
+                try:
+                    close = float(k[2])
+                    vol = float(k[5])
+                    amt = close * vol * 100.0
+                    daily_amounts[dt] = daily_amounts.get(dt, 0.0) + amt
+                except:
+                    pass
+        
+        sorted_dates = sorted(list(daily_amounts.keys()))
+        if len(sorted_dates) >= 20:
+            amounts_seq = [daily_amounts[d] for d in sorted_dates]
+            amt_5 = sum(amounts_seq[-5:]) / 5.0
+            amt_20 = sum(amounts_seq[-20:]) / 20.0
+            if amt_20 > 0:
+                return amt_5 / amt_20
+    except Exception as e:
+        print(f"Error calculating sector volume ratio for {sector_id}: {e}")
+    return 1.0
 
 async def update_sector_volume_loop():
-    global http_client, sector_volume_ratios
-    await asyncio.sleep(2)
-    while True:
-        try:
-            print("Background updating sector volume ratios...")
-            url = "http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=80&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:2+f:!50&fields=f12"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = await http_client.get(url, headers=headers, timeout=5.0)
-            data = response.json()
-            if "data" in data and "diff" in data["data"]:
-                sector_ids = [item.get("f12") for item in data["data"]["diff"] if item.get("f12")]
-                
-                async def get_ratio(sec_id):
-                    kline_url = f"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=90.{sec_id}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=25"
-                    try:
-                        r = await http_client.get(kline_url, headers=headers, timeout=3.0)
-                        res = r.json()
-                        if "data" in res and "klines" in res["data"]:
-                            klines = res["data"]["klines"]
-                            if len(klines) >= 20:
-                                amounts = []
-                                for kl in klines:
-                                    parts = kl.split(',')
-                                    if len(parts) > 6:
-                                        try:
-                                            amounts.append(float(parts[6]))
-                                        except:
-                                            pass
-                                if len(amounts) >= 20:
-                                    amt_5 = sum(amounts[-5:]) / 5.0
-                                    amt_20 = sum(amounts[-20:]) / 20.0
-                                    if amt_20 > 0:
-                                        return sec_id, amt_5 / amt_20
-                    except Exception:
-                        pass
-                    return sec_id, 1.0
+    try:
+        global http_client, sector_volume_ratios
+        print("update_sector_volume_loop entered, sleeping 2s...")
+        await asyncio.sleep(2)
+        while True:
+            try:
+                print("Background updating sector volume ratios by constituents...")
+                url = "http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=80&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:2+f:!50&fields=f12,f3,f109,f110"
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                response = await http_client.get(url, headers=headers, timeout=5.0)
+                data = response.json()
+                if "data" in data and "diff" in data["data"]:
+                    candidates = []
+                    for item in data["data"]["diff"]:
+                        sec_id = item.get("f12")
+                        change = float(item.get("f3", 0.0) or 0.0)
+                        change5d = float(item.get("f109", 0.0) or 0.0)
+                        change20d = float(item.get("f110", 0.0) or 0.0)
+                        
+                        if change20d <= -5.0 and 0.0 < change5d < 4.0 and change >= -1.0:
+                            candidates.append(sec_id)
+                    
+                    print(f"Found {len(candidates)} sector candidates matching price criteria for volume check.")
+                    
+                    for sid in candidates:
+                        try:
+                            ratio = await calculate_sector_volume_ratio_by_constituents(sid)
+                            sector_volume_ratios[sid] = ratio
+                        except Exception as inner_e:
+                            print(f"Error calculating volume ratio for {sid}: {inner_e}")
+                        await asyncio.sleep(0.4)
+                        
+                    print(f"Background updated {len(sector_volume_ratios)} sector volume ratios.")
+                await asyncio.sleep(300)
+            except Exception as e:
+                print(f"Background sector volume ratios error: {e}")
+                await asyncio.sleep(60)
+    except Exception as fatal_e:
+        print(f"FATAL error in update_sector_volume_loop: {fatal_e}")
 
-                for i in range(0, len(sector_ids), 10):
-                    chunk = sector_ids[i:i+10]
-                    tasks = [get_ratio(sid) for sid in chunk]
-                    results = await asyncio.gather(*tasks)
-                    for sid, ratio in results:
-                        sector_volume_ratios[sid] = ratio
-                    await asyncio.sleep(0.1)
-                print(f"Background updated {len(sector_volume_ratios)} sector volume ratios.")
-            await asyncio.sleep(300)
-        except Exception as e:
-            print(f"Background sector volume ratios error: {e}")
-            await asyncio.sleep(60)
+
+
+
 
 async def fetch_sectors():
     global http_client, cached_sectors, last_sectors_fetch_time, sector_volume_ratios
@@ -389,7 +476,7 @@ async def fundflow_stock(symbol: str):
 async def get_sector_stocks(sector_id: str):
     global http_client
     # Fetch constituent stocks with PE, PB, MarketCap, Turnover, net profit growth (f185), revenue growth (f186)
-    url = f"http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=40&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:{sector_id}&fields=f12,f14,f2,f3,f4,f5,f6,f15,f16,f1,f9,f23,f21,f8,f185,f186"
+    url = f"http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=40&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:{sector_id}&fields=f12,f14,f2,f3,f4,f5,f6,f15,f16,f13,f9,f23,f21,f8,f185,f186"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         response = await http_client.get(url, headers=headers, timeout=5.0)
@@ -399,22 +486,18 @@ async def get_sector_stocks(sector_id: str):
             diff_list = data["data"]["diff"]
             
             async def enrich_stock_kline(item):
-                market_code = "sh" if item.get("f1") == 1 else "sz"
+                market_code = "sh" if item.get("f13") == 1 else "sz"
                 code = item.get("f12", "")
                 symbol = f"{market_code}{code}"
                 
                 ma_bullish = False
                 poc_breakout = True
+                daily_amts = {}
                 
-                kline_url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,70,qfq"
-                try:
-                    r = await http_client.get(kline_url, timeout=2.0)
-                    k_data = r.json()
-                    if k_data.get("code") == 0 and symbol in k_data.get("data", {}):
-                        stock_data = k_data["data"][symbol]
-                        kline_key = "qfqday" if "qfqday" in stock_data else "day"
-                        if kline_key in stock_data:
-                            klines = stock_data[kline_key]
+                async with kline_semaphore:
+                    try:
+                        klines = await fetch_kline_from_sina(symbol, "day", 70)
+                        if klines:
                             if len(klines) >= 50:
                                 closes = [float(k[2]) for k in klines]
                                 highs = [float(k[3]) for k in klines]
@@ -449,16 +532,39 @@ async def get_sector_stocks(sector_id: str):
                                     poc_idx = bins.index(max(bins))
                                     poc_high = l_min + (poc_idx + 1) * bin_width
                                     poc_breakout = current_price >= poc_high
-                except Exception:
-                    pass
-                return symbol, ma_bullish, poc_breakout
+                                
+                                for k in klines[-30:]:
+                                    try:
+                                        c = float(k[2])
+                                        v = float(k[5])
+                                        daily_amts[k[0]] = c * v * 100.0
+                                    except:
+                                        pass
+                    except Exception:
+                        pass
+                return symbol, ma_bullish, poc_breakout, daily_amts
 
             enrich_tasks = [enrich_stock_kline(item) for item in diff_list]
             enrich_results = await asyncio.gather(*enrich_tasks)
             enrich_map = {r[0]: (r[1], r[2]) for r in enrich_results}
 
+            sector_daily_amounts = {}
+            for r in enrich_results:
+                daily_amts = r[3]
+                for dt, amt in daily_amts.items():
+                    sector_daily_amounts[dt] = sector_daily_amounts.get(dt, 0.0) + amt
+            
+            sorted_dates = sorted(list(sector_daily_amounts.keys()))
+            if len(sorted_dates) >= 20:
+                amounts_seq = [sector_daily_amounts[d] for d in sorted_dates]
+                amt_5 = sum(amounts_seq[-5:]) / 5.0
+                amt_20 = sum(amounts_seq[-20:]) / 20.0
+                if amt_20 > 0:
+                    vol_ratio = amt_5 / amt_20
+                    sector_volume_ratios[sector_id] = vol_ratio
+
             for item in diff_list:
-                market_code = "sh" if item.get("f1") == 1 else "sz"
+                market_code = "sh" if item.get("f13") == 1 else "sz"
                 code = item.get("f12", "")
                 symbol = f"{market_code}{code}"
                 
@@ -532,6 +638,15 @@ async def get_kline_data(symbol: str, period: str = "day", limit: int = 100):
     else:
         req_symbol = f"sh{symbol}" if symbol.startswith("6") else f"sz{symbol}"
     
+    # Try Sina K-line first as primary
+    try:
+        klines = await fetch_kline_from_sina(req_symbol, period, limit)
+        if klines:
+            return klines
+    except Exception as e:
+        print(f"Sina K-line fallback error: {e}")
+        
+    # Fallback to Tencent K-line API
     url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={req_symbol},{period},,,{limit},qfq"
     try:
         response = await http_client.get(url, timeout=5.0)

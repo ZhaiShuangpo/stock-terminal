@@ -1403,7 +1403,7 @@ export default function App() {
                           const isResonance = 
                             stock.pe > 0 && stock.pe < maxPe && 
                             stock.pb > 0 && stock.pb < maxPb && 
-                            stock.changePercent >= 2.0 && stock.changePercent <= 9.0 && 
+                            stock.changePercent >= 2.0 && 
                             stock.turnover >= 2.0 && stock.turnover < 18.0 && 
                             stock.marketCap >= 50 &&
                             stock.maBullish &&

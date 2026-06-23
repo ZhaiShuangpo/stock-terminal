@@ -11,7 +11,7 @@ lsof -t -i:5173 | xargs kill -9 2>/dev/null
 echo "正在启动后端行情引擎 (Port 8000)..."
 cd backend
 source venv/bin/activate
-nohup python main.py > backend.log 2>&1 &
+nohup python -u main.py > backend.log 2>&1 &
 cd ..
 
 # 3. 启动前端 (React Vite)
