@@ -10,6 +10,11 @@ async def test():
         if data.get("type") == "ping": # skip ping
              msg = await ws.recv()
              data = json.loads(msg)
-        print(json.dumps(data, indent=2, ensure_ascii=False)[:500])
+        print(json.dumps({
+            "type": data.get("type"),
+            "resonanceCount": len(data.get("resonanceStocks", [])),
+            "resonanceSymbols": [item.get("symbol") for item in data.get("resonanceStocks", [])],
+            "resonanceMeta": data.get("resonanceMeta"),
+        }, indent=2, ensure_ascii=False))
 
 asyncio.run(test())

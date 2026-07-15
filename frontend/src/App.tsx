@@ -1,12 +1,25 @@
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { lazy, Suspense, useEffect, useState, useMemo, useRef } from 'react';
 import { Activity, Settings, Search, X, GripVertical, Folder, File, Files, GitBranch, Play, ChevronDown, ChevronRight } from 'lucide-react';
-import { Chart } from './components/Chart';
 import { calculateMA, calculateMACD } from './utils/indicators';
+import { assessLongTermCandidate, isTacticalCandidate } from './utils/stockSelection';
 import { SECTOR_ETF_MAP } from './utils/etfMapping';
+import { fetchJson, marketWebSocketUrl } from './services/api';
+import type {
+  ChartMarker, FundFlow, Group, HistoryPoint, IndexData, IntradayPoint, InvestmentThesis,
+  LinePoint, MarketAlert, MarketDataMessage, MarketSentiment, PaperTrade,
+  ResonanceMeta, ResonanceStock, SearchResult, SectorData, SectorStockMeta, StockData, ThesisEvaluationResult,
+} from './types/domain';
+import type { UTCTimestamp } from 'lightweight-charts';
+
+const Chart = lazy(() => import('./components/Chart').then((module) => ({ default: module.Chart })));
+const PortfolioCenter = lazy(() => import('./components/PortfolioCenter').then((module) => ({ default: module.PortfolioCenter })));
+const ResearchCenter = lazy(() => import('./components/ResearchCenter').then((module) => ({ default: module.ResearchCenter })));
+const StrategyLab = lazy(() => import('./components/StrategyLab').then((module) => ({ default: module.StrategyLab })));
+const pageFallback = <div className="flex-1 flex items-center justify-center text-gray-500">正在加载模块…</div>;
 
 // Dnd-kit imports
 import {
-  DndContext, 
+  DndContext,
   closestCenter,
   PointerSensor,
   useSensor,
@@ -21,45 +34,6 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
-
-interface StockData {
-  code: string;
-  symbol: string;
-  name: string;
-  price: number;
-  high: number;
-  low: number;
-  change: number;
-  changePercent: number;
-  volume: number;
-  amount: number;
-  pe?: number;
-  pb?: number;
-  marketCap?: number;
-  trend: number[];
-}
-
-interface Group {
-  id: string;
-  name: string;
-  bossName: string;
-  symbols: string[];
-}
-
-interface PaperTrade {
-  id: string;
-  symbol: string;
-  name: string;
-  buyPrice: number;
-  buyTime: number;
-  aiLogic: string;
-  sellPrice?: number;
-  sellTime?: number;
-  sellAiLogic?: string;
-  evaluation?: string;
-  evalStatus?: string;
-  isEvaluating?: boolean;
-}
 
 // Sortable Group Component
 interface SortableGroupProps {
@@ -98,7 +72,7 @@ const SortableGroup = ({
   };
 
   return (
-    <div 
+    <div
       ref={setNodeRef}
       style={style}
       className={`flex items-center justify-between px-2 py-2 rounded-md text-left transition-colors group/item ${isActive ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800/50 hover:text-white'}`}
@@ -109,9 +83,9 @@ const SortableGroup = ({
         </div>
       )}
       {editingGroupId === group.id && !isBossMode ? (
-        <input 
-          type="text" 
-          value={editingGroupName} 
+        <input
+          type="text"
+          value={editingGroupName}
           onChange={(e) => onEditChange(e.target.value)}
           onBlur={() => onEditBlur(group.id, editingGroupName)}
           onKeyDown={(e) => onEditKeyDown(e, group.id, editingGroupName)}
@@ -124,7 +98,7 @@ const SortableGroup = ({
           <span className="text-xs bg-gray-900 px-1.5 rounded text-gray-500 ml-2">{group.symbols.length}</span>
         </div>
       )}
-      
+
       {!isBossMode && group.id !== 'all' && editingGroupId !== group.id && (
          <div className="hidden group-hover/item:flex items-center space-x-1 ml-2">
             <button onClick={(e) => { e.stopPropagation(); onEditStart(group.id, group.name); }} className="text-gray-500 hover:text-blue-400 text-xs">✎</button>
@@ -140,16 +114,16 @@ interface SortableRowProps {
   stock: StockData;
   isSelected: boolean;
   isBossMode: boolean;
-  latestAlert: any;
+  latestAlert?: MarketAlert;
   onClick: () => void;
   getColorClass: (val: number) => string;
   getBgColorClass: (val: number) => string;
   renderSparkline: (trend: number[], change: number) => React.ReactNode;
 }
 
-const SortableRow = ({ 
-  stock, isSelected, isBossMode, latestAlert, onClick, 
-  getColorClass, getBgColorClass, renderSparkline 
+const SortableRow = ({
+  stock, isSelected, isBossMode, latestAlert, onClick,
+  getColorClass, getBgColorClass, renderSparkline
 }: SortableRowProps) => {
   const {
     attributes,
@@ -169,8 +143,8 @@ const SortableRow = ({
   };
 
   return (
-    <div 
-      ref={setNodeRef} 
+    <div
+      ref={setNodeRef}
       style={style}
       className={`grid grid-cols-10 gap-4 px-6 py-2 border-b border-gray-900/50 hover:bg-gray-800/50 transition-colors items-center cursor-pointer group ${isSelected ? 'bg-gray-800/60' : ''}`}
       onClick={onClick}
@@ -224,9 +198,74 @@ const SortableRow = ({
 
 interface AIAnalysisResult {
   analysis: string;
+  longTermStrategy?: string;
+  swingStrategy?: string;
+  shortTermStrategy?: string;
   support?: number | null;
   resistance?: number | null;
+  supportBasis?: string;
+  resistanceBasis?: string;
   winRate?: string | null;
+  ratingBasis?: string;
+  asOf?: string;
+  searchStatus?: 'complete' | 'partial' | 'failed';
+  directCatalystFound?: boolean;
+  confidence?: number;
+  modelUsed?: string;
+  searchQueries?: string[];
+  sources?: Array<{
+    title: string;
+    url: string;
+    publishedAt?: string;
+    sourceType?: string;
+    keyFact?: string;
+  }>;
+}
+
+interface MarketReviewResult {
+  review: string;
+  asOf?: string;
+  modelUsed?: string;
+  searchStatus?: 'complete' | 'partial' | 'failed';
+  searchQueries?: string[];
+  sources?: Array<{ title: string; url: string }>;
+}
+
+interface NewsSummaryResult {
+  summary: string;
+  sentiment: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE' | 'UNCERTAIN';
+  factSentiment?: string;
+  shortTermImpact?: string;
+  pricedInRisk?: string;
+  confidence?: number;
+  asOf?: string;
+  searchStatus?: 'complete' | 'partial' | 'failed';
+  modelUsed?: string;
+  sources?: Array<{ title: string; url: string; publishedAt?: string; sourceType?: string; keyFact?: string }>;
+}
+
+interface BackendHealth {
+  status: 'ok' | 'degraded';
+  sectorMap?: {
+    stockCount: number;
+    healthy: boolean;
+    minimumHealthyStockCount: number;
+    status?: 'initializing' | 'rebuilding' | 'ready' | 'degraded';
+    source?: 'eastmoney' | 'sina' | 'local-cache' | null;
+    updatedAt?: string | null;
+    lastError?: string | null;
+  };
+}
+
+function readStoredJson<T>(key: string, fallback: T): T {
+  const saved = localStorage.getItem(key);
+  if (!saved) return fallback;
+  try {
+    return JSON.parse(saved) as T;
+  } catch {
+    console.warn(`Ignoring invalid local storage value: ${key}`);
+    return fallback;
+  }
 }
 
 interface VSCodeMockProps {
@@ -236,12 +275,21 @@ interface VSCodeMockProps {
 
 function VSCodeMock({ stocks, onClose }: VSCodeMockProps) {
   const [activeFile, setActiveFile] = useState('config.json');
+  const [monitorTick, setMonitorTick] = useState(0);
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({
     root: true,
     backend: true,
     src: true,
     components: true
   });
+
+  useEffect(() => {
+    const timer = setInterval(() => setMonitorTick(tick => tick + 1), 1500);
+    return () => clearInterval(timer);
+  }, []);
+
+  const pipelineBandwidth = (8 + (monitorTick % 50) / 10).toFixed(1);
+  const packetsProcessed = 400 + (monitorTick * 17) % 200;
 
   const toggleFolder = (folder: string) => {
     setOpenFolders(prev => ({ ...prev, [folder]: !prev[folder] }));
@@ -466,7 +514,7 @@ Frontend: React 19 with Tailwind CSS and lightweight-charts.
           <div className="p-3 text-[11px] font-bold uppercase tracking-wider text-[#858585]">
             Explorer: STOCK-TERMINAL
           </div>
-          
+
           <div className="flex-1 flex flex-col py-1">
             <div className="flex items-center px-3 py-1 bg-[#2a2a2b] font-semibold">
               <ChevronDown className="w-3 h-3 mr-1 text-[#858585]" />
@@ -549,8 +597,8 @@ Frontend: React 19 with Tailwind CSS and lightweight-charts.
                 <div key={i}>{i + 1}</div>
               ))}
             </div>
-            <div 
-              className="pl-14 text-[#d4d4d4]" 
+            <div
+              className="pl-14 text-[#d4d4d4]"
               dangerouslySetInnerHTML={{ __html: getEditorContent() }}
             />
           </div>
@@ -566,8 +614,8 @@ Frontend: React 19 with Tailwind CSS and lightweight-charts.
               <div>[vite] hot module replacement enabled</div>
               <div>[info] dev server running on <span className="text-blue-400 underline">http://localhost:5173/</span></div>
               <div>[info] backend websocket pipeline connected to ws://localhost:8000/ws/market</div>
-              <div className="text-gray-400">[data] pipeline bandwidth: {(Math.random() * 5 + 8).toFixed(1)} kb/s</div>
-              <div className="text-gray-400">[data] packets processed: {Math.floor(Math.random() * 200 + 400)}</div>
+              <div className="text-gray-400">[data] pipeline bandwidth: {pipelineBandwidth} kb/s</div>
+              <div className="text-gray-400">[data] packets processed: {packetsProcessed}</div>
               <div className="text-green-500">[OK] dev server check completed: no errors.</div>
               <div className="text-yellow-400">[warn] deprecated API dependency detected in express mock.</div>
               <div className="text-[#d4d4d4] flex items-center space-x-1.5 mt-1">
@@ -598,88 +646,109 @@ Frontend: React 19 with Tailwind CSS and lightweight-charts.
   );
 }
 
-interface AIAnalysisResult {
-  analysis: string;
-  support?: number | null;
-  resistance?: number | null;
-  winRate?: string | null;
-}
-
 export default function App() {
   const [stocks, setStocks] = useState<StockData[]>([]);
   const [connected, setConnected] = useState(false);
+  const [backendHealth, setBackendHealth] = useState<BackendHealth | null>(null);
   const [latency, setLatency] = useState(0);
   const [isBossMode, setIsBossMode] = useState(false);
+  const [bossMonitorTick, setBossMonitorTick] = useState(0);
   const [selectedStock, setSelectedStock] = useState<StockData | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<{symbol: string, name: string, code: string}[]>([]);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
-  
+
   useEffect(() => {
     localStorage.setItem('gemini_api_key', apiKey);
   }, [apiKey]);
 
+  useEffect(() => {
+    let disposed = false;
+    const refreshHealth = async () => {
+      try {
+        const health = await fetchJson<BackendHealth>('/api/health');
+        if (!disposed) setBackendHealth(health);
+      } catch {
+        if (!disposed) setBackendHealth(null);
+      }
+    };
+    refreshHealth();
+    const timer = window.setInterval(refreshHealth, 60_000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, []);
+
   const [aiAnalyses, setAiAnalyses] = useState<Record<string, AIAnalysisResult>>({});
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [chartPeriod, setChartPeriod] = useState<'intraday' | 'day' | 'week' | 'month'>('intraday');
-  const [intradayData, setIntradayData] = useState<any[]>([]);
-  const [vwapData, setVwapData] = useState<any[]>([]);
-  const [volumeData, setVolumeData] = useState<any[]>([]);
-  const [ma5Data, setMa5Data] = useState<any[]>([]);
-  const [ma10Data, setMa10Data] = useState<any[]>([]);
-  const [ma20Data, setMa20Data] = useState<any[]>([]);
-  const [ma60Data, setMa60Data] = useState<any[]>([]);
-  const [ma120Data, setMa120Data] = useState<any[]>([]);
-  const [macdData, setMacdData] = useState<{ dif: any[], dea: any[], histogram: any[] } | null>(null);
-  const [markers, setMarkers] = useState<any[]>([]);
+  const [intradayData, setIntradayData] = useState<Array<IntradayPoint | HistoryPoint>>([]);
+  const [vwapData, setVwapData] = useState<LinePoint[]>([]);
+  const [volumeData, setVolumeData] = useState<LinePoint[]>([]);
+  const [ma5Data, setMa5Data] = useState<LinePoint[]>([]);
+  const [ma10Data, setMa10Data] = useState<LinePoint[]>([]);
+  const [ma20Data, setMa20Data] = useState<LinePoint[]>([]);
+  const [ma60Data, setMa60Data] = useState<LinePoint[]>([]);
+  const [ma120Data, setMa120Data] = useState<LinePoint[]>([]);
+  const [macdData, setMacdData] = useState<{ dif: LinePoint[], dea: LinePoint[], histogram: LinePoint[] } | null>(null);
+  const [markers, setMarkers] = useState<ChartMarker[]>([]);
   const [marketReview, setMarketReview] = useState<string>('');
+  const [marketReviewMeta, setMarketReviewMeta] = useState<MarketReviewResult | null>(null);
   const [isReviewing, setIsReviewing] = useState(false);
-  
+
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [indices, setIndices] = useState<any[]>([]);
-  const [sectors, setSectors] = useState<any[]>([]);
-  const [selectedSector, setSelectedSector] = useState<any>(null);
-  const [sectorStocks, setSectorStocks] = useState<any[]>([]);
-  const [alertStream, setAlertStream] = useState<any[]>([]);
-  const [fundFlow, setFundFlow] = useState<any>(null);
-  const [sentiment, setSentiment] = useState<any>(null);
-  const [newsSummaries, setNewsSummaries] = useState<Record<string, { summary: string; sentiment: string }>>({});
+  const [indices, setIndices] = useState<IndexData[]>([]);
+  const [sectors, setSectors] = useState<SectorData[]>([]);
+  const [resonanceStocks, setResonanceStocks] = useState<ResonanceStock[]>([]);
+  const [resonanceMeta, setResonanceMeta] = useState<ResonanceMeta | null>(null);
+  const [selectedSector, setSelectedSector] = useState<SectorData | null>(null);
+  const [sectorStocks, setSectorStocks] = useState<ResonanceStock[]>([]);
+  const [sectorStockMode, setSectorStockMode] = useState<'long_term' | 'all' | 'tactical'>('long_term');
+  const [sectorStockMeta, setSectorStockMeta] = useState<SectorStockMeta | null>(null);
+  const [sectorStocksLoading, setSectorStocksLoading] = useState(false);
+  const [sectorStocksError, setSectorStocksError] = useState('');
+  const [alertStream, setAlertStream] = useState<MarketAlert[]>([]);
+  const [fundFlow, setFundFlow] = useState<FundFlow | null>(null);
+  const [sentiment, setSentiment] = useState<MarketSentiment | null>(null);
+  const [newsSummaries, setNewsSummaries] = useState<Record<string, NewsSummaryResult>>({});
   const [isAnalyzingNews, setIsAnalyzingNews] = useState(false);
-  const [chartIndicators, setChartIndicators] = useState(() => {
-    const saved = localStorage.getItem('chart_indicators');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
-    }
-    return { ma: true, macd: true, volume: true, vp: true };
-  });
+  const [chartIndicators, setChartIndicators] = useState(() =>
+    readStoredJson('chart_indicators', { ma: true, macd: true, volume: true, vp: true })
+  );
 
   useEffect(() => {
     localStorage.setItem('chart_indicators', JSON.stringify(chartIndicators));
   }, [chartIndicators]);
 
   const [paperTrades, setPaperTrades] = useState<PaperTrade[]>(() => {
-    const saved = localStorage.getItem('paper_trades');
-    if (saved) {
-       try {
-          const parsed = JSON.parse(saved);
-          return parsed.map((t: PaperTrade) => ({ ...t, isEvaluating: false }));
-       } catch (e) {
-          return [];
-       }
+    const parsed = readStoredJson<unknown>('paper_trades', []);
+    if (!Array.isArray(parsed)) {
+      console.warn('Ignoring invalid local storage value: paper_trades');
+      return [];
     }
-    return [];
+    return parsed.map((trade) => ({ ...(trade as PaperTrade), isEvaluating: false }));
   });
 
   useEffect(() => {
     localStorage.setItem('paper_trades', JSON.stringify(paperTrades));
   }, [paperTrades]);
 
+  const [investmentTheses, setInvestmentTheses] = useState<InvestmentThesis[]>(() => {
+    const parsed = readStoredJson<unknown>('investment_theses', []);
+    return Array.isArray(parsed) ? parsed as InvestmentThesis[] : [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('investment_theses', JSON.stringify(investmentTheses));
+  }, [investmentTheses]);
+
   const [groups, setGroups] = useState<Group[]>(() => {
-    const saved = localStorage.getItem('stock_groups');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
+    const savedGroups = readStoredJson<unknown>('stock_groups', null);
+    if (Array.isArray(savedGroups)) {
+      return savedGroups as Group[];
+    }
+    if (savedGroups !== null) {
+      console.warn('Ignoring invalid local storage value: stock_groups');
     }
     return [
       { id: 'all', name: '🔥 全部自选', bossName: 'Task Queue', symbols: ["sh600519", "sz300750", "sh601318", "sz002594", "sh601127", "sh601138", "sz000001", "sh600036"] },
@@ -688,6 +757,44 @@ export default function App() {
       { id: 'etf', name: '📈 宽基ETF', bossName: 'Failed', symbols: ["sh600030"] }
     ];
   });
+
+  const exportResearchData = () => {
+    const payload = {
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      groups,
+      paperTrades,
+      investmentTheses,
+      chartIndicators,
+    };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `stock-research-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importResearchData = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const payload = JSON.parse(String(reader.result)) as Record<string, unknown>;
+        if (payload.schemaVersion !== 1 || !Array.isArray(payload.groups) || !Array.isArray(payload.paperTrades) || !Array.isArray(payload.investmentTheses)) {
+          throw new Error('备份结构不兼容');
+        }
+        if (!window.confirm('导入会覆盖当前自选分组、策略记录和研究卡片，是否继续？')) return;
+        setGroups(payload.groups as Group[]);
+        setPaperTrades((payload.paperTrades as PaperTrade[]).map((trade) => ({ ...trade, isEvaluating: false })));
+        setInvestmentTheses(payload.investmentTheses as InvestmentThesis[]);
+        if (payload.chartIndicators && typeof payload.chartIndicators === 'object') setChartIndicators(payload.chartIndicators as typeof chartIndicators);
+        window.alert('研究数据已恢复。');
+      } catch (error) {
+        window.alert(`导入失败：${error instanceof Error ? error.message : '无法解析文件'}`);
+      }
+    };
+    reader.readAsText(file);
+  };
 
   const [activeGroupId, setActiveGroupId] = useState('all');
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
@@ -721,10 +828,10 @@ export default function App() {
 
   const allSymbols = useMemo(() => {
     const groupSymbols = groups.flatMap(g => g.symbols);
-    const activePaperSymbols = paperTrades.filter(t => !t.sellPrice).map(t => t.symbol);
+    const activePaperSymbols = paperTrades.filter(t => t.sellPrice === undefined).map(t => t.symbol);
     return Array.from(new Set([...groupSymbols, ...activePaperSymbols]));
   }, [groups, paperTrades]);
-  
+
   const wsRef = useRef<WebSocket | null>(null);
   const allSymbolsRef = useRef(allSymbols);
 
@@ -756,92 +863,130 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!isBossMode) return;
+    const timer = setInterval(() => setBossMonitorTick(tick => tick + 1), 1500);
+    return () => clearInterval(timer);
+  }, [isBossMode]);
+
+  useEffect(() => {
     if (!searchQuery) {
       setSearchResults([]);
       setIsSearching(false);
       return;
     }
+    const controller = new AbortController();
     const timer = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const res = await fetch(`http://localhost:8000/api/search?q=${searchQuery}`);
-        const data = await res.json();
+        const data = await fetchJson<{ results: SearchResult[] }>(
+          `/api/search?q=${encodeURIComponent(searchQuery)}`,
+          { signal: controller.signal },
+        );
         setSearchResults(data.results || []);
-      } catch (e) {
-        console.error(e);
+      } catch (error) {
+        if (!controller.signal.aborted) console.error(error);
       } finally {
-        setIsSearching(false);
+        if (!controller.signal.aborted) setIsSearching(false);
       }
     }, 300);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [searchQuery]);
 
   useEffect(() => {
     if (activeTab !== 'sectors') return;
-    let isMounted = true;
-    const fetchSentiment = async () => {
-      try {
-        const res = await fetch('http://localhost:8000/api/market_sentiment');
-        const data = await res.json();
-        if (isMounted && data && data.up !== undefined) {
-          setSentiment(data);
+    const controller = new AbortController();
+    const fetchSectorDashboard = async () => {
+      const [sentimentResult, resonanceResult] = await Promise.allSettled([
+        fetchJson<MarketSentiment>('/api/market_sentiment', { signal: controller.signal }),
+        fetchJson<{ data: ResonanceStock[]; meta: ResonanceMeta }>('/api/resonance_stocks', { signal: controller.signal }),
+      ]);
+
+      if (sentimentResult.status === 'fulfilled' && !controller.signal.aborted) {
+        setSentiment(sentimentResult.value);
+      }
+      if (resonanceResult.status === 'fulfilled' && !controller.signal.aborted) {
+        const snapshot = resonanceResult.value;
+        if (Array.isArray(snapshot.data)) {
+          setResonanceStocks(snapshot.data);
+          setResonanceMeta(snapshot.meta || null);
         }
-      } catch (e) {
-        console.error("Failed to fetch sentiment", e);
       }
     };
-    fetchSentiment();
-    const interval = setInterval(fetchSentiment, 60000);
+    fetchSectorDashboard();
+    const interval = setInterval(fetchSectorDashboard, 60000);
     return () => {
-      isMounted = false;
+      controller.abort();
       clearInterval(interval);
     };
   }, [activeTab]);
 
   useEffect(() => {
-    let connectTime: number;
+    let connectTime = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
+    let reconnectAttempt = 0;
+
     const connect = () => {
+      if (disposed) return;
       connectTime = Date.now();
-      const ws = new WebSocket('ws://localhost:8000/ws/market');
+      const ws = new WebSocket(marketWebSocketUrl());
       wsRef.current = ws;
       ws.onopen = () => {
+        reconnectAttempt = 0;
         setConnected(true);
         setLatency(Date.now() - connectTime);
         ws.send(JSON.stringify({ type: 'subscribe', symbols: allSymbolsRef.current }));
       };
       ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'ping') {
-          ws.send(JSON.stringify({ type: 'pong' }));
-          setLatency(Date.now() - data.timestamp);
-        } else if (data.type === 'market_data') {
-          if (data.indices) setIndices(data.indices);
-          if (data.sectors) setSectors(data.sectors);
-          if (data.alerts && data.alerts.length > 0) {
-            setAlertStream(prev => [...data.alerts, ...prev].slice(0, 50));
-          }
-          setStocks(prevStocks => {
-            const newStocksMap = new Map(data.payload.map((s: StockData) => [s.symbol, s]));
-            return allSymbolsRef.current.map(sym => newStocksMap.get(sym) || prevStocks.find(p => p.symbol === sym)).filter(Boolean) as StockData[];
-          });
-          setSelectedStock(prev => {
-            if (prev) {
-              const updated = data.payload.find((s: StockData) => s.symbol === prev.symbol);
-              return updated || prev;
+        try {
+          const data = JSON.parse(event.data) as Partial<Omit<MarketDataMessage, 'type'>> & { type?: string; timestamp?: number };
+          if (data.type === 'ping' && typeof data.timestamp === 'number') {
+            ws.send(JSON.stringify({ type: 'pong' }));
+            setLatency(Math.max(0, Date.now() - data.timestamp));
+          } else if (data.type === 'market_data' && Array.isArray(data.payload)) {
+            if (Array.isArray(data.indices)) setIndices(data.indices);
+            if (Array.isArray(data.sectors)) setSectors(data.sectors);
+            if (Array.isArray(data.resonanceStocks)) setResonanceStocks(data.resonanceStocks);
+            if (data.resonanceMeta) setResonanceMeta(data.resonanceMeta);
+            if (Array.isArray(data.alerts) && data.alerts.length > 0) {
+              setAlertStream(prev => [...data.alerts!, ...prev].slice(0, 50));
             }
-            return prev;
-          });
+            setStocks(prevStocks => {
+              const payload = data.payload as StockData[];
+              const newStocksMap = new Map(payload.map(stock => [stock.symbol, stock]));
+              return allSymbolsRef.current.map(sym => newStocksMap.get(sym) || prevStocks.find(stock => stock.symbol === sym)).filter(Boolean) as StockData[];
+            });
+            setSelectedStock(prev => {
+              if (!prev) return prev;
+              return (data.payload as StockData[]).find(stock => stock.symbol === prev.symbol) || prev;
+            });
+          }
+        } catch (error) {
+          console.error('Ignoring malformed market WebSocket message', error);
         }
       };
+      ws.onerror = () => ws.close();
       ws.onclose = () => {
+        if (disposed || wsRef.current !== ws) return;
         setConnected(false);
         wsRef.current = null;
-        setTimeout(connect, 2000);
+        const delay = Math.min(30000, 1000 * 2 ** reconnectAttempt);
+        reconnectAttempt += 1;
+        reconnectTimer = setTimeout(connect, delay + Math.random() * 500);
       };
     };
     connect();
     return () => {
-      if (wsRef.current) wsRef.current.close();
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
   }, []);
 
@@ -874,8 +1019,10 @@ export default function App() {
     );
   };
 
+  const selectedSymbol = selectedStock?.symbol;
+
   useEffect(() => {
-    if (!selectedStock) {
+    if (!selectedSymbol) {
       setIntradayData([]);
       setVwapData([]);
       setVolumeData([]);
@@ -887,25 +1034,24 @@ export default function App() {
       setFundFlow(null);
       return;
     }
-    let isMounted = true;
+    const symbol = selectedSymbol;
+    const controller = new AbortController();
     const fetchData = async () => {
       try {
         if (chartPeriod === 'intraday') {
-          const [resIntraday, resFund] = await Promise.all([
-            fetch(`http://localhost:8000/api/intraday?symbol=${selectedStock.symbol}`),
-            fetch(`http://localhost:8000/api/fundflow?symbol=${selectedStock.symbol}`)
+          const [dataIntraday, dataFund] = await Promise.all([
+            fetchJson<{ data: string[]; date?: string }>(`/api/intraday?symbol=${encodeURIComponent(symbol)}`, { signal: controller.signal }),
+            fetchJson<{ data: FundFlow | null }>(`/api/fundflow?symbol=${encodeURIComponent(symbol)}`, { signal: controller.signal }),
           ]);
-          const dataIntraday = await resIntraday.json();
-          const dataFund = await resFund.json();
-          
-          if (dataIntraday.data && dataIntraday.date && isMounted) {
+
+          if (dataIntraday.data && dataIntraday.date && !controller.signal.aborted) {
             const year = dataIntraday.date.substring(0, 4);
             const month = dataIntraday.date.substring(4, 6);
             const day = dataIntraday.date.substring(6, 8);
-            
-            const chartData: any[] = [];
-            const vwapPoints: any[] = [];
-            const newMarkers: any[] = [];
+
+            const chartData: IntradayPoint[] = [];
+            const vwapPoints: LinePoint[] = [];
+            const newMarkers: ChartMarker[] = [];
             let prevCumVol = 0;
             const volWindow: number[] = [];
 
@@ -914,13 +1060,13 @@ export default function App() {
               const price = parseFloat(parts[1]);
               const cumVol = parseFloat(parts[2]);
               const cumAmount = parseFloat(parts[3]);
-              
+
               const hour = parseInt(parts[0].substring(0, 2), 10);
               const minute = parseInt(parts[0].substring(2, 4), 10);
-              const time = Math.floor(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day), hour, minute) / 1000);
-              
+              const time = Math.floor(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day), hour, minute) / 1000) as UTCTimestamp;
+
               chartData.push({ time, value: price });
-              
+
               if (cumVol > 0) {
                 const vwap = cumAmount / (cumVol * 100);
                 vwapPoints.push({ time, value: vwap });
@@ -963,20 +1109,22 @@ export default function App() {
             setVwapData(vwapPoints);
             setMarkers(newMarkers);
           }
-          if (dataFund.data && isMounted) {
+          if (dataFund.data && !controller.signal.aborted) {
             setFundFlow(dataFund.data);
           }
         } else {
           // Historical data (day, week, month)
-          const resHistory = await fetch(`http://localhost:8000/api/history?symbol=${selectedStock.symbol}&period=${chartPeriod}`);
-          const dataHistory = await resHistory.json();
-          if (dataHistory.data && isMounted) {
+          const dataHistory = await fetchJson<{ data: HistoryPoint[] }>(
+            `/api/history?symbol=${encodeURIComponent(symbol)}&period=${chartPeriod}`,
+            { signal: controller.signal },
+          );
+          if (dataHistory.data && !controller.signal.aborted) {
             const rawData = dataHistory.data;
             setIntradayData(rawData);
             setVwapData([]);
-            
+
             if (rawData.length > 0) {
-              const volData = rawData.map((d: any) => ({
+              const volData = rawData.map(d => ({
                 time: d.time,
                 value: d.volume,
                 color: d.close >= d.open ? 'rgba(255, 59, 48, 0.5)' : 'rgba(52, 199, 89, 0.5)'
@@ -993,25 +1141,25 @@ export default function App() {
               setMa120Data(ma120);
               const macdObj = calculateMACD(rawData);
               setMacdData(macdObj);
-              
+
               // Generate B/S signals: Resonance (MA + MACD) and Divergence (Price vs MACD)
-              const histMarkers: any[] = [];
+              const histMarkers: ChartMarker[] = [];
               const ma5Dict = new Map(ma5.map(d => [d.time, d.value]));
               const ma20Dict = new Map(ma20.map(d => [d.time, d.value]));
               const difDict = new Map(macdObj.dif.map(d => [d.time, d.value]));
               const deaDict = new Map(macdObj.dea.map(d => [d.time, d.value]));
-              
+
               let prevMa5: number | null = null;
               let prevMa20: number | null = null;
               let lastDivTimeIdx = 0;
-              
+
               for (let i = 0; i < rawData.length; i++) {
                 const item = rawData[i];
                 const currentMa5 = ma5Dict.get(item.time);
                 const currentMa20 = ma20Dict.get(item.time);
                 const currentDif = difDict.get(item.time);
                 const currentDea = deaDict.get(item.time);
-                
+
                 // 1. MACD & MA Resonance Strategy
                 if (currentMa5 !== undefined && currentMa20 !== undefined && prevMa5 !== null && prevMa20 !== null && currentDif !== undefined && currentDea !== undefined) {
                   if (prevMa5 <= prevMa20 && currentMa5 > currentMa20) {
@@ -1028,14 +1176,14 @@ export default function App() {
                     }
                   }
                 }
-                
+
                 // 2. MACD Divergence Detection (Top/Bottom)
                 if (i > 30 && (i - lastDivTimeIdx > 10) && currentDif !== undefined) {
                   let windowHigh = -Infinity;
                   let windowHighDif = -Infinity;
                   let windowLow = Infinity;
                   let windowLowDif = Infinity;
-                  
+
                   // Look back window to find local high/low and their MACD DIF
                   for (let j = i - 20; j < i - 2; j++) {
                      const jItem = rawData[j];
@@ -1049,7 +1197,7 @@ export default function App() {
                         windowLowDif = jDif;
                      }
                   }
-                  
+
                   // Top Divergence: Price hits new high, but MACD DIF is lower
                   if (item.high > windowHigh && currentDif < windowHighDif - 0.02) {
                      histMarkers.push({ time: item.time, position: 'aboveBar', color: '#ff9f0a', shape: 'arrowDown', text: '逃顶', size: 2 });
@@ -1061,7 +1209,7 @@ export default function App() {
                      lastDivTimeIdx = i;
                   }
                 }
-                
+
                 // 3. Smart Money / Volume Breakout (主力异动)
                 if (i > 20) {
                   let sumVol = 0;
@@ -1087,23 +1235,29 @@ export default function App() {
             }
           }
         }
-      } catch (e) {
-        console.error("Failed to fetch stock data", e);
+      } catch (error) {
+        if (!controller.signal.aborted) console.error("Failed to fetch stock data", error);
       }
     };
     fetchData();
     const interval = setInterval(fetchData, 60000);
     return () => {
-      isMounted = false;
+      controller.abort();
       clearInterval(interval);
     };
-  }, [selectedStock?.symbol, chartPeriod]);
+  }, [selectedSymbol, chartPeriod]);
 
   const displayedStocks = useMemo(() => {
     const activeGroup = groups.find(g => g.id === activeGroupId);
     if (!activeGroup) return [];
     return activeGroup.symbols.map(sym => stocks.find(s => s.symbol === sym)).filter(Boolean) as StockData[];
   }, [stocks, groups, activeGroupId]);
+
+  const displayedSectorStocks = useMemo(() => {
+    if (sectorStockMode === 'tactical') return sectorStocks.filter(isTacticalCandidate);
+    if (sectorStockMode === 'long_term') return sectorStocks.filter((stock) => assessLongTermCandidate(stock).tier !== 'INSUFFICIENT');
+    return sectorStocks;
+  }, [sectorStocks, sectorStockMode]);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -1130,7 +1284,7 @@ export default function App() {
       setGroups((prevGroups) => {
         const oldIndex = prevGroups.findIndex(g => g.id === active.id);
         const newIndex = prevGroups.findIndex(g => g.id === over.id);
-        
+
         // Prevent moving 'all' group from index 0 if we decide to keep it pinned
         // But for now let's just use arrayMove on everything
         return arrayMove(prevGroups, oldIndex, newIndex);
@@ -1144,47 +1298,101 @@ export default function App() {
       return;
     }
     setIsReviewing(true);
-    setMarketReview('正在汇总全市场数据，召唤 Gemini 操盘手生成复盘中...');
+    setMarketReview('正在汇总指数、市场宽度与板块轮动数据，并联网核验当日驱动...');
+    setMarketReviewMeta(null);
     try {
-      const response = await fetch('http://localhost:8000/api/review', {
+      const data = await fetchJson<MarketReviewResult>('/api/review', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Gemini-Key': apiKey
         },
         body: JSON.stringify({
-          stocks: stocks,
-          indices: indices
+          indices,
+          sectors,
+          sentiment,
         })
       });
-      const data = await response.json();
       setMarketReview(data.review);
-    } catch (e) {
+      setMarketReviewMeta(data);
+    } catch {
       setMarketReview('报告生成失败，请检查网络或 API Key 状态。');
+      setMarketReviewMeta(null);
     } finally {
       setIsReviewing(false);
     }
   };
 
-  const handleSectorClick = async (sec: any) => {
-    setSelectedSector(sec);
-    setSectorStocks([]); // clear old data
+  const loadSectorStocks = async (sec: SectorData, mode: 'long_term' | 'all' | 'tactical') => {
+    setSectorStocksLoading(true);
+    setSectorStocksError('');
+    setSectorStockMeta(null);
+    setSectorStocks([]);
     try {
-      const response = await fetch(`http://localhost:8000/api/sector/${sec.id}`);
-      const data = await response.json();
-      if (data.data) {
-        setSectorStocks(data.data);
+      const requestMode = mode === 'tactical' ? 'tactical' : 'long_term';
+      const data = await fetchJson<{ data: ResonanceStock[]; meta: SectorStockMeta }>(`/api/sector/${encodeURIComponent(sec.id)}?mode=${requestMode}`);
+      if (Array.isArray(data.data)) {
+        const normalized = data.data.map((stock) => ({ ...stock, sectorName: sec.name }));
+        normalized.sort(mode === 'long_term'
+          ? (a, b) => assessLongTermCandidate(b).score - assessLongTermCandidate(a).score
+          : (a, b) => Number(isTacticalCandidate(b)) - Number(isTacticalCandidate(a)) || b.changePercent - a.changePercent);
+        setSectorStocks(normalized);
+        setSectorStockMeta(data.meta || null);
       }
     } catch (e) {
       console.error("Failed to fetch sector stocks", e);
+      setSectorStocksError('板块成分股获取失败，请稍后重试。');
+    } finally {
+      setSectorStocksLoading(false);
     }
+  };
+
+  const handleSectorClick = async (sec: SectorData) => {
+    setSelectedSector(sec);
+    setSectorStockMode('long_term');
+    await loadSectorStocks(sec, 'long_term');
+  };
+
+  const syncAiAnalysisToResearch = (stock: StockData, analysis: AIAnalysisResult) => {
+    if (!analysis.analysis || ['Gemini 思考中...', '分析失败，请重试', '网络错误，无法连接到分析引擎'].includes(analysis.analysis)) return;
+    const existing = investmentTheses.find((thesis) => thesis.symbol === stock.symbol && thesis.status !== 'INVALIDATED');
+    const now = Date.now();
+    const review = {
+      reviewedAt: now,
+      status: existing?.status || 'WATCH' as const,
+      note: `【AI投资分析证据】\n${analysis.analysis}\n\n【长期策略】\n${analysis.longTermStrategy || '未提供'}`,
+      confidence: analysis.confidence,
+      sources: analysis.sources,
+    };
+    if (existing) {
+      if (existing.reviewHistory?.some((item) => item.note === review.note)) {
+        window.alert('这份AI投资分析已经同步到该研究卡片。');
+        setActiveTab('research');
+        return;
+      }
+      setInvestmentTheses((current) => current.map((thesis) => thesis.id === existing.id ? { ...thesis, updatedAt: now, lastReviewedAt: now, reviewHistory: [review, ...(thesis.reviewHistory || [])] } : thesis));
+      window.alert('已作为“复核证据”追加到现有研究卡片，不会覆盖长期核心逻辑。');
+    } else {
+      setInvestmentTheses((current) => [{
+        id: `thesis_${now}`, symbol: stock.symbol, name: stock.name, sectorName: stock.sectorName,
+        coreThesis: '待人工填写：请基于商业模式、竞争优势与长期盈利能力建立核心逻辑。',
+        catalysts: analysis.directCatalystFound ? 'AI投资分析发现待核验催化，详见复核记录与来源。' : 'AI投资分析未确认可验证的直接催化。',
+        risks: '待人工补充：AI投资分析不能替代长期风险清单与独立尽调。',
+        kpis: '待人工补充：收入、利润、现金流、市场份额等可验证指标。',
+        invalidation: '待人工补充：未设置明确证伪条件前保持“观察”状态。',
+        horizon: '1Y', status: 'WATCH', conviction: 1, createdAt: now, updatedAt: now, lastReviewedAt: now,
+        reviewHistory: [review],
+      }, ...current]);
+      window.alert('已创建“观察”状态的研究草稿。AI投资分析仅作为复核证据，需人工确认长期逻辑与证伪条件。');
+    }
+    setActiveTab('research');
   };
 
   if (isBossMode) {
     return (
-      <VSCodeMock 
-        stocks={stocks} 
-        onClose={() => setIsBossMode(false)} 
+      <VSCodeMock
+        stocks={stocks}
+        onClose={() => setIsBossMode(false)}
       />
     );
   }
@@ -1192,22 +1400,17 @@ export default function App() {
   return (
     <div className={`min-h-screen ${isBossMode ? 'bg-gray-950 grayscale' : 'bg-[var(--color-stock-bg)]'} text-white flex flex-col text-sm transition-all duration-300`}>
       <header className="h-12 border-b border-gray-800 flex items-center justify-between px-4 bg-[var(--color-stock-panel)]">
-        <div className="flex items-center space-x-4">
-          <Activity className={`w-5 h-5 ${isBossMode ? 'text-gray-400' : 'text-[var(--color-stock-red)]'}`} />
-          <h1 className="font-bold tracking-wider text-gray-100">{isBossMode ? 'System Monitor' : '大A极客盯盘'}</h1>
-          <div className="h-4 w-px bg-gray-700 mx-2"></div>
-          {!isBossMode && (
-            <nav className="flex space-x-1">
-              {[{ id: 'dashboard', name: '行情中心' }, { id: 'sectors', name: '板块涨幅' }, { id: 'alerts', name: '异动预警' }, { id: 'ai', name: '智能复盘' }, { id: 'paper', name: '虚拟交易' }].map((tab) => (
-                <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                  className={`px-3 py-1 rounded-md transition-colors ${activeTab === tab.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'}`}>
-                  {tab.name}
-                </button>
-              ))}
-            </nav>
-          )}
+        <div className="min-w-0 flex-1 overflow-x-auto">
+          <nav className="flex w-max space-x-1 whitespace-nowrap">
+            {[{ id: 'dashboard', name: '投资驾驶舱' }, { id: 'sectors', name: '行业机会' }, { id: 'research', name: '公司研究' }, { id: 'portfolio', name: '组合风险' }, { id: 'paper', name: '策略实验室' }, { id: 'ai', name: '智能复盘' }, { id: 'alerts', name: '战术预警' }].map((tab) => (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                className={`px-3 py-1 rounded-md transition-colors ${activeTab === tab.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'}`}>
+                {tab.name}
+              </button>
+            ))}
+          </nav>
         </div>
-        <div className="flex items-center space-x-4 text-gray-400">
+        <div className="ml-3 flex shrink-0 items-center space-x-4 text-gray-400">
           <div className="flex items-center space-x-4 mr-4 hidden lg:flex">
             {indices.map(idx => (
               <div key={idx.code} className="flex flex-col items-center">
@@ -1252,18 +1455,18 @@ export default function App() {
               )}
             </div>
             <div className="flex flex-col space-y-0.5 px-2 flex-1 overflow-auto">
-              <DndContext 
+              <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}
                 onDragEnd={handleGroupDragEnd}
                 modifiers={[restrictToVerticalAxis]}
               >
-                <SortableContext 
+                <SortableContext
                   items={groups.map(g => g.id)}
                   strategy={verticalListSortingStrategy}
                 >
                   {groups.map((group) => (
-                    <SortableGroup 
+                    <SortableGroup
                       key={group.id}
                       group={group}
                       isActive={activeGroupId === group.id}
@@ -1287,6 +1490,12 @@ export default function App() {
         <section className="flex-1 flex flex-col bg-black overflow-hidden relative">
           {activeTab === 'dashboard' ? (
             <>
+              <div className="grid grid-cols-4 gap-3 px-6 py-3 border-b border-gray-800 bg-gray-950/60 text-xs">
+                <button onClick={() => setActiveTab('research')} className="text-left bg-gray-900 border border-gray-800 rounded p-2 hover:border-blue-900"><span className="text-gray-500">有效研究逻辑</span><b className="block text-lg text-blue-400">{investmentTheses.filter((thesis) => thesis.status === 'ACTIVE').length}</b></button>
+                <button onClick={() => setActiveTab('research')} className="text-left bg-gray-900 border border-gray-800 rounded p-2 hover:border-amber-900"><span className="text-gray-500">待复核/预警</span><b className="block text-lg text-amber-400">{investmentTheses.filter((thesis) => ['WATCH', 'WARNING'].includes(thesis.status)).length}</b></button>
+                <button onClick={() => setActiveTab('portfolio')} className="text-left bg-gray-900 border border-gray-800 rounded p-2 hover:border-blue-900"><span className="text-gray-500">模拟持仓</span><b className="block text-lg">{paperTrades.filter((trade) => trade.sellPrice === undefined).length}</b></button>
+                <button onClick={() => setActiveTab('portfolio')} className="text-left bg-gray-900 border border-gray-800 rounded p-2 hover:border-red-900"><span className="text-gray-500">无逻辑覆盖持仓</span><b className="block text-lg text-red-400">{paperTrades.filter((trade) => trade.sellPrice === undefined && !trade.thesisId).length}</b></button>
+              </div>
               <div className="grid grid-cols-10 gap-4 px-6 py-2 border-b border-gray-800 text-xs font-medium text-[var(--color-stock-muted)] sticky top-0 bg-black z-10">
                 <div className="col-span-2">{isBossMode ? 'Task ID' : '名称 / 代码'}</div>
                 <div className="text-right">{isBossMode ? 'Value' : '最新价'}</div>
@@ -1301,18 +1510,18 @@ export default function App() {
                 {displayedStocks.length === 0 ? (
                   <div className="flex items-center justify-center h-full text-gray-500">此分组暂无自选股...</div>
                 ) : (
-                  <DndContext 
+                  <DndContext
                     sensors={sensors}
                     collisionDetection={closestCenter}
                     onDragEnd={handleDragEnd}
                     modifiers={[restrictToVerticalAxis]}
                   >
-                    <SortableContext 
+                    <SortableContext
                       items={displayedStocks.map(s => s.symbol)}
                       strategy={verticalListSortingStrategy}
                     >
                       {displayedStocks.map((stock) => (
-                        <SortableRow 
+                        <SortableRow
                           key={stock.symbol}
                           stock={stock}
                           isSelected={selectedStock?.symbol === stock.symbol}
@@ -1344,7 +1553,22 @@ export default function App() {
                       {selectedSector.changePercent > 0 ? '+' : ''}{selectedSector.changePercent.toFixed(2)}%
                     </div>
                   </div>
-                  
+
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-800 bg-gray-900/60 p-3">
+                    <div className="flex gap-2">
+                      {[
+                        { id: 'long_term', label: '长期研究候选' },
+                        { id: 'all', label: '全部长期样本' },
+                        { id: 'tactical', label: '短期战术候选' },
+                      ].map((option) => <button key={option.id} onClick={() => { const mode = option.id as 'long_term' | 'all' | 'tactical'; const changesBackendUniverse = (mode === 'tactical') !== (sectorStockMode === 'tactical'); setSectorStockMode(mode); if (changesBackendUniverse) loadSectorStocks(selectedSector, mode); }} className={`px-3 py-1.5 rounded text-xs ${sectorStockMode === option.id ? 'bg-blue-600 text-white' : 'bg-black text-gray-400 hover:text-white'}`}>{option.label}</button>)}
+                    </div>
+                    <div className="text-[10px] text-gray-500 text-right">
+                      <div>{sectorStockMeta?.message || '正在准备板块样本'}</div>
+                      {sectorStockMeta?.asOf && <div>数据 {new Date(sectorStockMeta.asOf).toLocaleString('zh-CN')} · 样本 {sectorStockMeta.sampleSize}</div>}
+                    </div>
+                    {sectorStockMode !== 'tactical' && <div className="w-full border-t border-gray-800 pt-2 text-[10px] text-gray-600">长期评分只使用当前可获得的规模、PE/PB、营收/利润同比和换手数据，不使用“今日涨幅≥2%”作为入选条件；因缺少ROIC、自由现金流、负债结构和历史估值分位，结果仅作为研究队列，不是买入建议。</div>}
+                  </div>
+
                   {/* Sector ETF Mapping Banner */}
                   {(() => {
                     const mappedEtf = SECTOR_ETF_MAP[selectedSector.name];
@@ -1353,12 +1577,12 @@ export default function App() {
                         <div className="mb-4 bg-gradient-to-r from-blue-900/30 to-indigo-900/30 border border-blue-800/50 rounded-lg p-4 flex items-center justify-between shadow-lg">
                           <div>
                             <div className="text-blue-400 font-bold mb-1 flex items-center space-x-2">
-                              <span>🛡️ 稳健长线优选：行业核心 ETF</span>
-                              <span className="text-[10px] bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded border border-blue-500/30">规避个股黑天鹅</span>
+                              <span>相关行业 ETF 参考</span>
+                              <span className="text-[10px] bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded border border-blue-500/30">静态映射 · 非投资建议</span>
                             </div>
-                            <div className="text-gray-300 text-sm">看好【{selectedSector.name}】板块轮动，但不想承担单只股票爆雷风险？推荐直接配置行业 ETF。</div>
+                            <div className="text-gray-300 text-sm">【{selectedSector.name}】的相关 ETF 映射仅用于进一步研究，需自行核对持仓结构、规模、流动性及跟踪误差。</div>
                           </div>
-                          <button 
+                          <button
                             onClick={() => {
                                // Quick fetch logic to add ETF to watchlist (mocking the exact price for now as we'd need another API call, but we can set it up for the WebSocket to catch)
                                const newEtf = { symbol: mappedEtf.symbol, code: mappedEtf.symbol.slice(2), name: mappedEtf.name, price: 0, high: 0, low: 0, change: 0, changePercent: 0, volume: 0, amount: 0, trend: [] } as StockData;
@@ -1369,7 +1593,7 @@ export default function App() {
                             }}
                             className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded shadow transition-colors"
                           >
-                            配置 {mappedEtf.name}
+                            查看 {mappedEtf.name}
                           </button>
                         </div>
                       );
@@ -1379,51 +1603,33 @@ export default function App() {
 
                   <div className="flex-1 overflow-auto">
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pb-10">
-                      {sectorStocks.length === 0 ? (
-                        <div className="col-span-full text-center text-gray-500 mt-20">正在拉取成分股数据...</div>
+                      {sectorStocksLoading ? (
+                        <div className="col-span-full text-center text-gray-500 mt-20">正在按“{sectorStockMode === 'tactical' ? '短期战术' : '长期研究'}”口径拉取成分股...</div>
+                      ) : sectorStocksError ? (
+                        <div className="col-span-full text-center text-red-400 mt-20">{sectorStocksError}</div>
+                      ) : displayedSectorStocks.length === 0 ? (
+                        <div className="col-span-full text-center text-gray-500 mt-20">当前样本中没有符合该口径的个股；可切换“全部长期样本”查看数据覆盖情况。</div>
                       ) : (
-                        sectorStocks.map((stock: any) => {
-                          const limits = (() => {
-                            const secName = selectedSector?.name || '';
-                            const growthSectors = ['半导体', '电子', '芯片', '消费电子', '软件', '计算机', '电池', '光伏', '医疗器械', '生物制品', '制药', '军工', '航天', '通信'];
-                            const cyclicalSectors = ['银行', '煤炭', '钢铁', '水泥', '房地产', '港口', '航运', '石油', '金属', '公路', '电力'];
-                            
-                            if (growthSectors.some(name => secName.includes(name))) {
-                              return { maxPe: 80, maxPb: 8.0 };
-                            }
-                            if (cyclicalSectors.some(name => secName.includes(name))) {
-                              return { maxPe: 12, maxPb: 1.2 };
-                            }
-                            return { maxPe: 40, maxPb: 4.5 };
-                          })();
-
-                          const maxPe = (stock.maxPe && stock.maxPe > 0) ? stock.maxPe : limits.maxPe;
-                          const maxPb = (stock.maxPb && stock.maxPb > 0) ? stock.maxPb : limits.maxPb;
-
-                          const isResonance = 
-                            stock.pe > 0 && stock.pe < maxPe && 
-                            stock.pb > 0 && stock.pb < maxPb && 
-                            stock.changePercent >= 2.0 && 
-                            stock.turnover >= 2.0 && stock.turnover < 18.0 && 
-                            stock.marketCap >= 50 &&
-                            stock.maBullish &&
-                            stock.pocBreakout;
-
-                          let borderClass = isResonance ? 'border-yellow-600/50' : 'border-gray-800';
+                        displayedSectorStocks.map((stock) => {
+                          const pe = stock.pe ?? 0;
+                          const pb = stock.pb ?? 0;
+                          const assessment = assessLongTermCandidate(stock);
+                          const tactical = isTacticalCandidate(stock);
+                          const borderClass = sectorStockMode === 'tactical' && tactical ? 'border-yellow-600/50' : assessment.tier === 'CANDIDATE' ? 'border-blue-700/60' : 'border-gray-800';
 
                           return (
                             <div key={stock.symbol} onClick={() => {
-                              const newStock = { symbol: stock.symbol, code: stock.code, name: stock.name, price: stock.price, high: stock.high, low: stock.low, change: stock.change, changePercent: stock.changePercent, volume: stock.volume, amount: stock.amount, pe: stock.pe, pb: stock.pb, marketCap: stock.marketCap, turnover: stock.turnover, trend: [] } as StockData;
+                              const newStock = { symbol: stock.symbol, code: stock.code, name: stock.name, price: stock.price, high: stock.high, low: stock.low, change: stock.change, changePercent: stock.changePercent, volume: stock.volume, amount: stock.amount, pe: stock.pe, pb: stock.pb, marketCap: stock.marketCap, sectorName: selectedSector.name, turnover: stock.turnover, trend: [] } as StockData;
                               setStocks(prev => prev.some(s => s.symbol === stock.symbol) ? prev : [newStock, ...prev]);
                               setSelectedStock(newStock);
                             }} className={`bg-gray-900 border ${borderClass} rounded-lg p-3 flex flex-col justify-between hover:border-gray-600 transition-colors cursor-pointer group relative overflow-hidden`}>
-                              {isResonance && <div className="absolute top-0 right-0 bg-gradient-to-l from-yellow-600/20 to-transparent w-16 h-full pointer-events-none"></div>}
-                              
+                              {tactical && sectorStockMode === 'tactical' && <div className="absolute top-0 right-0 bg-gradient-to-l from-yellow-600/20 to-transparent w-16 h-full pointer-events-none"></div>}
+
                               <div className="flex justify-between items-start mb-2">
                                 <div>
                                   <div className="text-gray-200 font-bold group-hover:text-white transition-colors flex items-center space-x-2">
                                     <span>{stock.name}</span>
-                                    {isResonance && <span className="text-[10px] bg-yellow-500/20 text-yellow-500 px-1 py-0.5 rounded font-bold border border-yellow-500/30">⭐ 共振首选</span>}
+                                    {sectorStockMode === 'tactical' ? tactical && <span className="text-[10px] bg-yellow-500/20 text-yellow-500 px-1 py-0.5 rounded border border-yellow-500/30">短期共振</span> : <span className={`text-[10px] px-1 py-0.5 rounded border ${assessment.tier === 'CANDIDATE' ? 'text-blue-400 border-blue-800' : assessment.tier === 'WATCH' ? 'text-purple-400 border-purple-900' : 'text-gray-500 border-gray-800'}`}>{assessment.tier === 'CANDIDATE' ? `长期研究 ${assessment.score}` : assessment.tier === 'WATCH' ? `观察 ${assessment.score}` : '数据不足'}</span>}
                                   </div>
                                   <div className="text-xs text-gray-500 font-mono mt-0.5">{stock.code}</div>
                                 </div>
@@ -1433,18 +1639,21 @@ export default function App() {
                                 </div>
                               </div>
                               <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-gray-500 border-t border-gray-800/50 pt-2 mt-1">
-                                <span>PE: {stock.pe > 0 ? stock.pe.toFixed(1) : '-'}</span>
-                                <span>PB: {stock.pb > 0 ? stock.pb.toFixed(2) : '-'}</span>
+                                <span>PE: {pe > 0 ? pe.toFixed(1) : '-'}</span>
+                                <span>PB: {pb > 0 ? pb.toFixed(2) : '-'}</span>
                                 <span>换手: {stock.turnover > 0 ? `${stock.turnover.toFixed(1)}%` : '-'}</span>
                                 <span>市值: {(stock.marketCap || 0).toFixed(0)}亿</span>
-                                {stock.netProfitGrowth !== undefined && stock.netProfitGrowth !== 0 && (
+                                {typeof stock.netProfitGrowth === 'number' && (
                                   <span className={stock.netProfitGrowth > 0 ? 'text-red-400' : 'text-green-400'}>
                                     利润: {stock.netProfitGrowth > 0 ? '+' : ''}{stock.netProfitGrowth.toFixed(1)}%
                                   </span>
                                 )}
-                                {stock.maBullish && <span className="text-yellow-500/80">均线多头</span>}
-                                {stock.pocBreakout && <span className="text-purple-400/80">筹码突破</span>}
+                                {typeof stock.revenueGrowth === 'number' && <span className={stock.revenueGrowth > 0 ? 'text-red-400' : 'text-green-400'}>营收: {stock.revenueGrowth > 0 ? '+' : ''}{stock.revenueGrowth.toFixed(1)}%</span>}
+                                <span>字段覆盖: {(assessment.coverage * 100).toFixed(0)}%</span>
+                                {sectorStockMode === 'tactical' && stock.maBullish && <span className="text-yellow-500/80">均线多头</span>}
+                                {sectorStockMode === 'tactical' && stock.pocBreakout && <span className="text-purple-400/80">筹码突破</span>}
                               </div>
+                              {sectorStockMode !== 'tactical' && <div className="mt-2 flex flex-wrap gap-1 text-[10px]">{assessment.tags.slice(0, 3).map((tag) => <span key={tag} className="rounded bg-blue-950/30 px-1.5 py-0.5 text-blue-400">{tag}</span>)}{assessment.warnings.slice(0, 2).map((warning) => <span key={warning} className="rounded bg-amber-950/30 px-1.5 py-0.5 text-amber-500">{warning}</span>)}</div>}
                             </div>
                           );
                         })
@@ -1458,9 +1667,9 @@ export default function App() {
                     <h2 className="text-xl font-bold">板块涨跌幅排行榜</h2>
                     <div className="text-xs text-gray-500">数据实时更新</div>
                   </div>
-                  
+
                   {sentiment && (
-                    <div className="mb-6 grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
                       {/* 1. 涨跌分布 */}
                       <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
                         <div className="text-xs text-gray-500 mb-2">全市场涨跌分布</div>
@@ -1492,10 +1701,7 @@ export default function App() {
                            <span className="text-gray-400 text-sm">今日涨停 / 跌停</span>
                            <span className="font-bold font-mono text-base"><span className="text-[var(--color-stock-red)]">{sentiment.limitUp}</span> <span className="text-gray-600">/</span> <span className="text-[var(--color-stock-green)]">{sentiment.limitDown}</span></span>
                         </div>
-                        <div className="flex justify-between items-center mt-2 pt-2 border-t border-gray-800/50">
-                           <span className="text-gray-400 text-sm">昨日涨停今日收益</span>
-                           <span className={`font-bold font-mono text-base ${getColorClass(sentiment.prevZtAvg)}`}>{sentiment.prevZtAvg > 0 ? '+' : ''}{sentiment.prevZtAvg}%</span>
-                        </div>
+                        <div className="text-[10px] text-gray-600 mt-2 pt-2 border-t border-gray-800/50">不展示当前数据源未可靠提供的昨日涨停收益</div>
                       </div>
 
                       {/* 3. 两市成交量 */}
@@ -1507,21 +1713,120 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* 4. 连板天梯 */}
-                      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-                        <div className="text-xs text-gray-500 mb-2">连板天梯图</div>
-                        <div className="flex space-x-1 h-12 items-end">
-                           {Object.entries(sentiment.ladder || {}).sort((a, b) => Number(b[0]) - Number(a[0])).map(([boards, count]: [string, any]) => (
-                             <div key={boards} className="flex-1 flex flex-col items-center justify-end group relative">
-                               <div className="absolute -top-6 bg-gray-800 text-[10px] px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">{count}只</div>
-                               <div className="w-full bg-red-500/80 rounded-t-sm hover:bg-red-400 transition-colors" style={{ height: `${Math.max(10, (count / sentiment.limitUp) * 100)}%` }}></div>
-                               <div className="text-[10px] text-gray-400 mt-1">{boards}板</div>
-                             </div>
-                           ))}
-                        </div>
-                      </div>
                     </div>
                   )}
+
+                  {/* 左侧埋伏与共振个股推荐看板 */}
+                  <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* 左侧埋伏板块 */}
+                    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col">
+                      <div className="text-sm font-bold text-purple-400 mb-3 flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          <span>长期观察：低位改善板块</span>
+                          <span className="text-[10px] text-gray-500 font-normal">（价格修复+资金观察 · 非买入信号）</span>
+                        </div>
+                      </div>
+                      {(() => {
+                        const ambushSectors = sectors.filter(sec =>
+                          sec.change20d <= -5.0 &&
+                          sec.change5d > 0.0 &&
+                          sec.change5d < 4.0 &&
+                          sec.changePercent >= -1.0 &&
+                          sec.volRatio < 0.8 &&
+                          sec.fundFlow > 0
+                        );
+                        if (ambushSectors.length === 0) {
+                          return (
+                            <div className="flex-1 flex items-center justify-center py-6 text-gray-600 text-xs border border-dashed border-gray-800 rounded-md">
+                              当前市场无符合观察条件的板块
+                            </div>
+                          );
+                        }
+                        return (
+                          <div className="flex flex-wrap gap-2">
+                            {ambushSectors.map(sec => (
+                              <button
+                                key={sec.id}
+                                onClick={() => handleSectorClick(sec)}
+                                className="bg-purple-950/20 border border-purple-500/30 hover:border-purple-500/80 hover:bg-purple-900/10 px-3 py-1.5 rounded text-xs font-bold text-purple-300 transition-colors flex items-center space-x-2"
+                              >
+                                <span>{sec.name}</span>
+                                <span className="text-[10px] text-purple-400 font-mono bg-purple-500/10 px-1 py-0.2 rounded">{sec.changePercent > 0 ? '+' : ''}{sec.changePercent.toFixed(2)}%</span>
+                              </button>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* 共振首选个股 */}
+                    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col">
+                      <div className="text-sm font-bold text-yellow-500 mb-3 flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          <span>短期趋势共振候选</span>
+                          <span className="text-[10px] text-gray-500 font-normal">（当日样本 · 战术信号，不代表长期价值）</span>
+                        </div>
+                        {resonanceMeta && (
+                          <span
+                            className={`text-[10px] font-normal ${resonanceMeta.status === 'ok' ? 'text-gray-500' : 'text-orange-400'}`}
+                            title={resonanceMeta.message}
+                          >
+                            {resonanceMeta.dataTimestamp
+                              ? `数据 ${new Date(resonanceMeta.dataTimestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+                              : resonanceMeta.message}
+                            {resonanceMeta.status === 'partial' ? ' · 部分样本' : ''}
+                          </span>
+                        )}
+                      </div>
+                      {resonanceStocks.length === 0 ? (
+                        <div className="flex-1 flex items-center justify-center py-6 text-gray-600 text-xs border border-dashed border-gray-800 rounded-md">
+                          {resonanceMeta && ['error', 'initializing'].includes(resonanceMeta.status)
+                            ? resonanceMeta.message
+                            : '当前最新样本无符合共振首选的个股'}
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap gap-2 overflow-auto max-h-32 pr-1">
+                          {resonanceStocks.map(stock => (
+                            <button
+                              key={stock.symbol}
+                              onClick={() => {
+                                const newStock = {
+                                  symbol: stock.symbol,
+                                  code: stock.code,
+                                  name: stock.name,
+                                  price: stock.price,
+                                  high: stock.high,
+                                  low: stock.low,
+                                  change: stock.change,
+                                  changePercent: stock.changePercent,
+                                  volume: stock.volume,
+                                  amount: stock.amount,
+                                  pe: stock.pe,
+                                  pb: stock.pb,
+                                  marketCap: stock.marketCap,
+                                  turnover: stock.turnover,
+                                  trend: []
+                                } as StockData;
+                                setStocks(prev => prev.some(s => s.symbol === stock.symbol) ? prev : [newStock, ...prev]);
+                                setSelectedStock(newStock);
+                              }}
+                              className="bg-yellow-950/20 border border-yellow-500/30 hover:border-yellow-500/80 hover:bg-yellow-900/10 px-3 py-1.5 rounded text-xs font-bold text-yellow-400 transition-colors flex flex-col items-start min-w-[120px]"
+                            >
+                              <div className="flex justify-between w-full space-x-3 items-center">
+                                <span className="text-gray-200">{stock.name}</span>
+                                <span className="font-mono text-[10px] text-gray-500">{stock.code}</span>
+                              </div>
+                              <div className="mt-1 flex items-center space-x-2 text-[10px] text-gray-400 font-mono">
+                                <span className={getColorClass(stock.changePercent)}>{stock.changePercent > 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%</span>
+                                <span className="text-gray-600">|</span>
+                                <span className="text-purple-400 text-[9px] bg-purple-500/5 px-1 py-0.2 rounded border border-purple-500/10">{stock.sectorName}</span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
 
                   <div className="flex-1 overflow-auto">
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-10">
@@ -1529,10 +1834,10 @@ export default function App() {
                         <div className="col-span-full text-center text-gray-500 mt-20">正在拉取板块数据...</div>
                       ) : (
                         sectors.sort((a, b) => b.changePercent - a.changePercent).map((sec, idx) => {
-                          const isAmbushSector = 
-                            sec.change20d <= -5.0 && 
-                            sec.change5d > 0.0 && 
-                            sec.change5d < 4.0 && 
+                          const isAmbushSector =
+                            sec.change20d <= -5.0 &&
+                            sec.change5d > 0.0 &&
+                            sec.change5d < 4.0 &&
                             sec.changePercent >= -1.0 &&
                             sec.volRatio < 0.8 &&
                             sec.fundFlow > 0;
@@ -1581,6 +1886,10 @@ export default function App() {
                 </>
               )}
             </div>
+          ) : activeTab === 'research' ? (
+            <Suspense fallback={pageFallback}><ResearchCenter stocks={stocks} theses={investmentTheses} onChange={setInvestmentTheses} onSelectStock={setSelectedStock} /></Suspense>
+          ) : activeTab === 'portfolio' ? (
+            <Suspense fallback={pageFallback}><PortfolioCenter trades={paperTrades} stocks={stocks} indices={indices} theses={investmentTheses} /></Suspense>
           ) : activeTab === 'alerts' ? (
             <div className="flex-1 flex flex-col p-6 overflow-hidden">
               <div className="flex items-center justify-between mb-6">
@@ -1620,10 +1929,10 @@ export default function App() {
                     </div>
                     <div>
                       <h2 className="text-2xl font-bold">智能复盘实验室</h2>
-                      <p className="text-sm text-gray-500">基于自选股异动与大盘情绪的深度 AI 策略报告</p>
+                      <p className="text-sm text-gray-500">基于指数、市场宽度与板块轮动的 AI 盘面策略报告</p>
                     </div>
                   </div>
-                  <button 
+                  <button
                     disabled={isReviewing}
                     onClick={handleGenerateReview}
                     className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold transition-all shadow-lg shadow-blue-600/20 disabled:opacity-50"
@@ -1634,8 +1943,31 @@ export default function App() {
 
                 <div className="flex-1 bg-gray-900/30 border border-gray-800 rounded-2xl p-8 overflow-auto custom-scrollbar">
                   {marketReview ? (
-                    <div className="prose prose-invert max-w-none prose-h3:text-blue-400 prose-h3:mt-6 prose-h3:mb-3 prose-p:text-gray-300 prose-p:leading-relaxed whitespace-pre-wrap">
-                      {marketReview}
+                    <div>
+                      {marketReviewMeta?.searchStatus && (
+                        <div className="mb-4 flex flex-wrap gap-2 text-[11px]">
+                          <span className={`rounded border px-2 py-1 ${marketReviewMeta.searchStatus === 'complete' ? 'border-emerald-800/60 bg-emerald-950/30 text-emerald-300' : 'border-amber-800/60 bg-amber-950/30 text-amber-300'}`}>
+                            联网检索：{marketReviewMeta.searchStatus === 'complete' ? '完成' : '部分完成'}
+                          </span>
+                          {marketReviewMeta.modelUsed && <span className="rounded border border-gray-700 px-2 py-1 text-gray-400">{marketReviewMeta.modelUsed}</span>}
+                          {marketReviewMeta.asOf && <span className="rounded border border-gray-700 px-2 py-1 text-gray-500">{new Date(marketReviewMeta.asOf).toLocaleString('zh-CN')}</span>}
+                        </div>
+                      )}
+                      <div className="prose prose-invert max-w-none prose-h3:text-blue-400 prose-h3:mt-6 prose-h3:mb-3 prose-p:text-gray-300 prose-p:leading-relaxed whitespace-pre-wrap">
+                        {marketReview}
+                      </div>
+                      {(marketReviewMeta?.sources?.length ?? 0) > 0 && (
+                        <div className="mt-6 border-t border-gray-800 pt-4">
+                          <div className="mb-2 text-xs font-medium text-blue-300">联网来源</div>
+                          <div className="space-y-1 text-xs">
+                            {marketReviewMeta?.sources?.map((source, index) => (
+                              <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer" className="block text-blue-400 hover:text-blue-300 hover:underline">
+                                {index + 1}. {source.title || source.url}
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-center">
@@ -1644,7 +1976,7 @@ export default function App() {
                       </div>
                       <h3 className="text-lg font-bold text-gray-400 mb-2">暂无复盘数据</h3>
                       <p className="text-sm text-gray-600 max-w-xs">
-                        点击上方按钮，Gemini 将深度诊断您的持仓情况并给出次日操盘策略。
+                        点击上方按钮，AI 将分析指数环境、板块轮动与下一交易日的可能路径。
                       </p>
                     </div>
                   )}
@@ -1665,101 +1997,37 @@ export default function App() {
               </div>
             </div>
           ) : activeTab === 'paper' ? (
-            <div className="flex-1 flex flex-col p-8 overflow-hidden">
-               <div className="flex items-center justify-between mb-8">
-                 <h2 className="text-2xl font-bold">虚拟交易与胜率回测</h2>
-                 <button onClick={() => { if(window.confirm('确定清空所有交易记录？')) setPaperTrades([]); }} className="text-xs text-gray-500 hover:text-white">清空记录</button>
-               </div>
-               <div className="flex-1 overflow-auto space-y-4">
-                 {paperTrades.length === 0 ? <div className="text-center text-gray-500 mt-20">暂无虚拟交易记录。<br/>在个股详情面板点击「记录虚拟买入」开始测试你的策略。</div> : paperTrades.slice().reverse().map(trade => {
-                   const currentStock = stocks.find(s => s.symbol === trade.symbol);
-                   const isClosed = trade.sellPrice !== undefined;
-                   const finalPrice = isClosed ? trade.sellPrice! : (currentStock?.price || trade.buyPrice);
-                   const pnl = finalPrice - trade.buyPrice;
-                   const pnlPercent = (pnl / trade.buyPrice) * 100;
-                   return (
-                     <div key={trade.id} className={`bg-gray-900 border ${isClosed ? 'border-gray-800' : 'border-blue-900/50'} rounded-xl p-5 hover:border-gray-700 transition-colors`}>
-                         <div className="flex justify-between items-start mb-4 border-b border-gray-800 pb-4">
-                         <div>
-                           <div className="font-bold text-lg flex items-center space-x-2">
-                             <span>{trade.name}</span>
-                             <span className="text-gray-500 text-sm font-normal">{trade.symbol}</span>
-                             <span className={`text-[10px] px-1.5 py-0.5 rounded ${isClosed ? 'bg-gray-800 text-gray-400' : 'bg-blue-900/30 text-blue-400'}`}>
-                               {isClosed ? '已平仓' : '持仓中'}
-                             </span>
-                           </div>
-                           <div className="text-xs text-gray-500 mt-1">
-                             买入时间: {new Date(trade.buyTime).toLocaleString()}
-                             {isClosed && trade.sellTime && ` | 卖出时间: ${new Date(trade.sellTime).toLocaleString()}`}
-                           </div>
-                         </div>
-                         <div className="text-right flex flex-col items-end">
-                           <div className="flex items-center space-x-3 mb-1">
-                             <span className="text-xs text-gray-500">{isClosed ? '最终盈亏' : '当前浮亏/浮盈'}</span>
-                             <button onClick={() => setPaperTrades(prev => prev.filter(t => t.id !== trade.id))} className="text-xs text-gray-600 hover:text-red-500 transition-colors">删除</button>
-                           </div>
-                           <div className={`text-xl font-bold font-mono ${pnl >= 0 ? 'text-[var(--color-stock-red)]' : 'text-[var(--color-stock-green)]'}`}>
-                             {pnl > 0 ? '+' : ''}{pnlPercent.toFixed(2)}%
-                           </div>
-                         </div>
-                       </div>
-                       <div className="grid grid-cols-2 gap-4 mb-4 text-sm font-mono bg-black p-3 rounded">
-                         <div><span className="text-gray-500">买入价格:</span> {trade.buyPrice.toFixed(2)}</div>
-                         <div><span className="text-gray-500">{isClosed ? '卖出价格:' : '当前价格:'}</span> {finalPrice.toFixed(2)}</div>
-                       </div>
-                       <div className="text-sm space-y-3">
-                         <div>
-                           <div className="flex items-center justify-between mb-1">
-                             <span className="text-blue-400 font-bold block">买入逻辑 / 策略理由：</span>
-                             {!isClosed && apiKey && (
-                               <button 
-                                 disabled={trade.isEvaluating}
-                                 onClick={async () => {
-                                    setPaperTrades(prev => prev.map(t => t.id === trade.id ? { ...t, isEvaluating: true } : t));
-                                    try {
-                                      const res = await fetch('http://localhost:8000/api/evaluate_thesis', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json', 'X-Gemini-Key': apiKey },
-                                        body: JSON.stringify({ symbol: trade.symbol, name: trade.name, thesis: trade.aiLogic })
-                                      });
-                                      const data = await res.json();
-                                      setPaperTrades(prev => prev.map(t => t.id === trade.id ? { ...t, isEvaluating: false, evaluation: data.evaluation, evalStatus: data.status } : t));
-                                    } catch (e) {
-                                      setPaperTrades(prev => prev.map(t => t.id === trade.id ? { ...t, isEvaluating: false, evaluation: '重估请求失败', evalStatus: 'WARNING' } : t));
-                                    }
-                                 }}
-                                 className="text-xs px-2 py-0.5 bg-blue-900/50 hover:bg-blue-800 text-blue-300 rounded transition-colors disabled:opacity-50"
-                               >
-                                 {trade.isEvaluating ? '重估中...' : '💡 逻辑周末体检'}
-                               </button>
-                             )}
-                           </div>
-                           <p className="text-gray-400 whitespace-pre-wrap bg-blue-950/20 p-3 rounded border border-blue-900/30">{trade.aiLogic}</p>
-                           
-                           {trade.evaluation && (
-                             <div className="mt-3 bg-gray-950 p-3 rounded border border-gray-800">
-                               <div className="flex items-center space-x-2 mb-2">
-                                 <span className="font-bold text-gray-300">体检报告:</span>
-                                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${trade.evalStatus === 'HOLD' ? 'bg-green-500/20 text-green-400' : trade.evalStatus === 'SELL' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
-                                   {trade.evalStatus}
-                                 </span>
-                               </div>
-                               <p className="text-gray-400 text-xs whitespace-pre-wrap leading-relaxed">{trade.evaluation}</p>
-                             </div>
-                           )}
-                         </div>
-                         {isClosed && trade.sellAiLogic && (
-                           <div>
-                             <span className="text-green-400 font-bold mb-1 block">卖出逻辑 / 平仓理由：</span>
-                             <p className="text-gray-400 whitespace-pre-wrap bg-green-950/20 p-3 rounded border border-green-900/30">{trade.sellAiLogic}</p>
-                           </div>
-                         )}
-                       </div>
-                     </div>
-                   );
-                 })}
-               </div>
-            </div>
+            <Suspense fallback={pageFallback}><StrategyLab
+              trades={paperTrades}
+              stocks={stocks}
+              indices={indices}
+              theses={investmentTheses}
+              apiConfigured={Boolean(apiKey)}
+              onChange={setPaperTrades}
+              onRequireApiKey={() => setShowSettings(true)}
+              onEvaluate={async (trade) => {
+                setPaperTrades((current) => current.map((item) => item.id === trade.id ? { ...item, isEvaluating: true } : item));
+                const thesis = investmentTheses.find((item) => item.id === trade.thesisId);
+                try {
+                  const data = await fetchJson<ThesisEvaluationResult>('/api/evaluate_thesis', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Gemini-Key': apiKey },
+                    body: JSON.stringify({
+                      symbol: trade.symbol, name: trade.name, thesis: thesis?.coreThesis || trade.aiLogic,
+                      catalysts: thesis?.catalysts || '', risks: thesis?.risks || '', kpis: thesis?.kpis || '',
+                      invalidation: thesis?.invalidation || '', entrySnapshot: trade.entrySnapshot || {},
+                    }),
+                  });
+                  setPaperTrades((current) => current.map((item) => item.id === trade.id ? { ...item, isEvaluating: false, evaluation: data.evaluation, evalStatus: data.status, evaluationConfidence: data.confidence, evaluationAsOf: data.asOf, evaluationSources: data.sources } : item));
+                  if (thesis) {
+                    const reviewedAt = Date.now();
+                    const thesisStatus = data.status === 'SELL' ? 'INVALIDATED' : data.status === 'WARNING' ? 'WARNING' : 'ACTIVE';
+                    setInvestmentTheses((current) => current.map((item) => item.id === thesis.id ? { ...item, status: thesisStatus, lastReviewedAt: reviewedAt, updatedAt: reviewedAt, reviewHistory: [{ reviewedAt, status: thesisStatus, note: data.evaluation, confidence: data.confidence, sources: data.sources }, ...(item.reviewHistory || [])] } : item));
+                  }
+                } catch {
+                  setPaperTrades((current) => current.map((item) => item.id === trade.id ? { ...item, isEvaluating: false, evaluation: '联网逻辑复核失败，请稍后重试。', evalStatus: 'WARNING', evaluationConfidence: 0 } : item));
+                }
+              }}
+            /></Suspense>
           ) : null}
         </section>
 
@@ -1804,7 +2072,7 @@ export default function App() {
                     key={period.id}
                     onClick={() => {
                       if (chartPeriod !== period.id) {
-                        setChartPeriod(period.id as any);
+                        setChartPeriod(period.id as typeof chartPeriod);
                         setIntradayData([]);
                         setVwapData([]);
                         setVolumeData([]);
@@ -1824,37 +2092,37 @@ export default function App() {
                 {chartPeriod !== 'intraday' && (
                   <div className="flex-1 flex items-center justify-end space-x-3 text-xs text-gray-400 pl-4 border-l border-gray-800">
                     <label className="flex items-center space-x-1 cursor-pointer hover:text-white">
-                      <input 
-                        type="checkbox" 
-                        checked={chartIndicators.ma} 
-                        onChange={(e) => setChartIndicators((prev: any) => ({ ...prev, ma: e.target.checked }))} 
+                      <input
+                        type="checkbox"
+                        checked={chartIndicators.ma}
+                        onChange={(e) => setChartIndicators(prev => ({ ...prev, ma: e.target.checked }))}
                         className="rounded bg-black border-gray-700 text-blue-600 focus:ring-0 focus:ring-offset-0 w-3 h-3"
                       />
                       <span>均线</span>
                     </label>
                     <label className="flex items-center space-x-1 cursor-pointer hover:text-white">
-                      <input 
-                        type="checkbox" 
-                        checked={chartIndicators.volume} 
-                        onChange={(e) => setChartIndicators((prev: any) => ({ ...prev, volume: e.target.checked }))} 
+                      <input
+                        type="checkbox"
+                        checked={chartIndicators.volume}
+                        onChange={(e) => setChartIndicators(prev => ({ ...prev, volume: e.target.checked }))}
                         className="rounded bg-black border-gray-700 text-blue-600 focus:ring-0 focus:ring-offset-0 w-3 h-3"
                       />
                       <span>成交量</span>
                     </label>
                     <label className="flex items-center space-x-1 cursor-pointer hover:text-white">
-                      <input 
-                        type="checkbox" 
-                        checked={chartIndicators.macd} 
-                        onChange={(e) => setChartIndicators((prev: any) => ({ ...prev, macd: e.target.checked }))} 
+                      <input
+                        type="checkbox"
+                        checked={chartIndicators.macd}
+                        onChange={(e) => setChartIndicators(prev => ({ ...prev, macd: e.target.checked }))}
                         className="rounded bg-black border-gray-700 text-blue-600 focus:ring-0 focus:ring-offset-0 w-3 h-3"
                       />
                       <span>MACD</span>
                     </label>
                     <label className="flex items-center space-x-1 cursor-pointer hover:text-white">
-                      <input 
-                        type="checkbox" 
-                        checked={chartIndicators.vp} 
-                        onChange={(e) => setChartIndicators((prev: any) => ({ ...prev, vp: e.target.checked }))} 
+                      <input
+                        type="checkbox"
+                        checked={chartIndicators.vp}
+                        onChange={(e) => setChartIndicators(prev => ({ ...prev, vp: e.target.checked }))}
                         className="rounded bg-black border-gray-700 text-blue-600 focus:ring-0 focus:ring-offset-0 w-3 h-3"
                       />
                       <span>筹码</span>
@@ -1868,13 +2136,13 @@ export default function App() {
                     <div className="text-xs mb-2 text-green-400">root@server:~# top -b -n 1</div>
                     <div className="text-xs mb-4">
                       Tasks: 135 total,   1 running, 134 sleeping,   0 stopped,   0 zombie<br/>
-                      %Cpu(s):  {Math.floor(Math.random() * 20 + 10).toFixed(1)} us,   {Math.floor(Math.random() * 5 + 1).toFixed(1)} sy,   0.0 ni,  {Math.floor(Math.random() * 20 + 60).toFixed(1)} id,   0.0 wa<br/>
-                      MiB Mem :  16384.0 total,   {Math.floor(Math.random() * 4000 + 1000).toFixed(1)} free,   8192.0 used,   {Math.floor(Math.random() * 4000 + 1000).toFixed(1)} buff/cache
+                      %Cpu(s):  {(10 + (bossMonitorTick % 20)).toFixed(1)} us,   {(1 + (bossMonitorTick % 5)).toFixed(1)} sy,   0.0 ni,  {(89 - (bossMonitorTick % 20)).toFixed(1)} id,   0.0 wa<br/>
+                      MiB Mem :  16384.0 total,   {(1000 + (bossMonitorTick * 173) % 4000).toFixed(1)} free,   8192.0 used,   {(1000 + (bossMonitorTick * 97) % 4000).toFixed(1)} buff/cache
                     </div>
                     <div className="flex-1 border border-green-900/50 rounded bg-green-950/10 p-2 relative overflow-hidden">
                        <div className="absolute inset-0 flex items-end justify-between px-1 opacity-50">
                          {Array.from({ length: 40 }).map((_, i) => (
-                           <div key={i} className="w-2 bg-green-500 rounded-t-sm transition-all duration-500" style={{ height: `${Math.random() * 100}%` }}></div>
+                           <div key={i} className="w-2 bg-green-500 rounded-t-sm transition-all duration-500" style={{ height: `${(i * 37 + bossMonitorTick * 11) % 100}%` }}></div>
                          ))}
                        </div>
                        <div className="absolute inset-0 flex items-center justify-center opacity-20 pointer-events-none">
@@ -1883,12 +2151,12 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  <Chart 
-                    data={intradayData} 
-                    vwapData={chartPeriod === 'intraday' ? vwapData : []} 
-                    markers={markers} 
-                    prevClose={selectedStock.price - selectedStock.change} 
-                    type={chartPeriod === 'intraday' ? 'area' : 'candlestick'} 
+                  <Suspense fallback={<div className="w-full h-full flex items-center justify-center text-gray-500">正在加载图表…</div>}><Chart
+                    data={intradayData}
+                    vwapData={chartPeriod === 'intraday' ? vwapData : []}
+                    markers={markers}
+                    prevClose={selectedStock.price - selectedStock.change}
+                    type={chartPeriod === 'intraday' ? 'area' : 'candlestick'}
                     volumeData={chartPeriod !== 'intraday' ? volumeData : undefined}
                     ma5Data={chartPeriod !== 'intraday' ? ma5Data : undefined}
                     ma10Data={chartPeriod !== 'intraday' ? ma10Data : undefined}
@@ -1908,7 +2176,7 @@ export default function App() {
                       upColor: '#ff3b30',
                       downColor: '#34c759',
                     }}
-                  />
+                  /></Suspense>
                 )}
               </div>
             </div>
@@ -1917,41 +2185,76 @@ export default function App() {
                 <>
                   <div className="flex justify-between items-center mb-4 space-x-2">
                     {(() => {
-                      const activeTrade = paperTrades.find(t => t.symbol === selectedStock.symbol && !t.sellPrice);
+                      const activeTrade = paperTrades.find(t => t.symbol === selectedStock.symbol && t.sellPrice === undefined);
                       return activeTrade ? (
-                        <button 
+                        <button
                           onClick={() => {
+                            const sellReason = window.prompt('记录卖出/结束验证的原因：', aiAnalyses[selectedStock.symbol]?.analysis || '手动结束验证');
+                            if (sellReason === null) return;
+                            const benchmark = indices.find((index) => index.code === activeTrade.benchmarkCode);
                             setPaperTrades(prev => prev.map(t => t.id === activeTrade.id ? {
                               ...t,
                               sellPrice: selectedStock.price,
                               sellTime: Date.now(),
-                              sellAiLogic: aiAnalyses[selectedStock.symbol]?.analysis || '手动盘中卖出'
+                              benchmarkSellPrice: benchmark?.price,
+                              sellAiLogic: sellReason.trim() || '手动结束验证'
                             } : t));
-                            alert('已记录虚拟卖出，可在"虚拟交易"面板查看最终盈亏');
+                            alert('已记录模拟卖出，可在“策略实验室”查看结果与基准比较');
                           }}
                           className="w-full py-2 bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 text-white font-bold rounded-lg shadow-lg shadow-green-500/20 transition-all"
                         >
-                          记录虚拟卖出
+                          记录模拟卖出
                         </button>
                       ) : (
-                        <button 
+                        <button
                           onClick={() => {
-                            const customLogic = window.prompt('记录核心买入逻辑/理由（留空则使用当前 AI 分析）：');
+                            const quantityInput = window.prompt('模拟买入股数（仅用于仓位与集中度计算）：', '100');
+                            if (quantityInput === null) return;
+                            const quantity = Number(quantityInput);
+                            if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isInteger(quantity)) {
+                              window.alert('请输入大于 0 的整数股数。');
+                              return;
+                            }
+                            const linkedThesis = investmentTheses.find((thesis) => thesis.symbol === selectedStock.symbol && ['ACTIVE', 'WATCH', 'WARNING'].includes(thesis.status));
+                            const customLogic = window.prompt('记录核心买入逻辑/理由（已有关联研究卡片时默认使用其核心逻辑）：', linkedThesis?.coreThesis || '');
                             if (customLogic === null) return; // cancelled
+                            const benchmark = indices.find((index) => index.code === '000300' || index.name.includes('沪深300'));
+                            const resonance = resonanceStocks.find((stock) => stock.symbol === selectedStock.symbol);
+                            const analysis = aiAnalyses[selectedStock.symbol];
                             const newTrade: PaperTrade = {
                               id: Date.now().toString(),
                               symbol: selectedStock.symbol,
                               name: selectedStock.name,
                               buyPrice: selectedStock.price,
                               buyTime: Date.now(),
+                              quantity,
+                              strategyId: linkedThesis ? 'long_term_thesis' : resonance ? 'realtime_resonance' : 'manual_research',
+                              strategyVersion: '2026.07-v2',
+                              signalType: linkedThesis ? 'LONG_TERM' : resonance ? 'TACTICAL' : 'MANUAL',
+                              signalSource: linkedThesis ? '公司研究卡片' : resonance ? '短期趋势共振候选' : '个股详情手动记录',
+                              thesisId: linkedThesis?.id,
+                              benchmarkCode: benchmark?.code,
+                              benchmarkName: benchmark?.name,
+                              benchmarkBuyPrice: benchmark?.price,
+                              entrySnapshot: {
+                                price: selectedStock.price,
+                                changePercent: selectedStock.changePercent,
+                                pe: selectedStock.pe,
+                                pb: selectedStock.pb,
+                                marketCap: selectedStock.marketCap,
+                                sectorName: selectedStock.sectorName || resonance?.sectorName,
+                                capturedAt: Date.now(),
+                                aiModel: analysis?.modelUsed,
+                                aiConfidence: analysis?.confidence,
+                              },
                               aiLogic: customLogic.trim() || aiAnalyses[selectedStock.symbol]?.analysis || '手动盘中买入',
                             };
                             setPaperTrades([...paperTrades, newTrade]);
-                            alert('已记录虚拟买入，可在"虚拟交易"面板追踪盈亏');
+                            alert('已记录模拟买入，可在“策略实验室”进行前向验证');
                           }}
                           className="w-full py-2 bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 text-white font-bold rounded-lg shadow-lg shadow-red-500/20 transition-all"
                         >
-                          记录虚拟买入
+                          记录模拟买入
                         </button>
                       );
                     })()}
@@ -1967,7 +2270,7 @@ export default function App() {
                            warningMessage = `⚠️【牛熊破位预警】当前价格已跌破 60 日均线生命线 (${lastMa60.toFixed(2)})！`;
                         }
                      }
-                     
+
                      if (warningMessage) {
                         return (
                            <div className="mb-4 p-3 bg-red-950/50 border border-red-900 rounded-lg flex items-center space-x-3 animate-pulse">
@@ -1979,31 +2282,116 @@ export default function App() {
                   })()}
                   <div className="bg-blue-900/10 border border-blue-900/50 rounded-lg p-3 mb-4">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-blue-400 font-medium">✨ Gemini AI 异动分析</span>
+                      <span className="text-blue-400 font-medium">✨ AI 投资分析</span>
+                    <div className="flex items-center gap-2">
+                    {aiAnalyses[selectedStock.symbol]?.searchStatus && <button onClick={() => syncAiAnalysisToResearch(selectedStock, aiAnalyses[selectedStock.symbol])} className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-blue-300 rounded transition-colors">同步到公司研究</button>}
                     <button disabled={isAnalyzing} onClick={async () => {
                         if (!apiKey) { setShowSettings(true); return; }
-                        setIsAnalyzing(true); 
+                        setIsAnalyzing(true);
                         const currentSymbol = selectedStock.symbol;
                         setAiAnalyses(prev => ({ ...prev, [currentSymbol]: { analysis: 'Gemini 思考中...' } }));
                         try {
-                          const res = await fetch(`http://localhost:8000/api/analyze?symbol=${currentSymbol}&name=${encodeURIComponent(selectedStock.name)}&price=${selectedStock.price}&changePercent=${selectedStock.changePercent}&pe=${selectedStock.pe || ''}&pb=${selectedStock.pb || ''}&marketCap=${selectedStock.marketCap || ''}`, { headers: { 'X-Gemini-Key': apiKey } });
-                          const data = await res.json(); 
+                          const params = new URLSearchParams({
+                            symbol: currentSymbol,
+                            name: selectedStock.name,
+                            price: String(selectedStock.price),
+                            changePercent: String(selectedStock.changePercent),
+                            pe: String(selectedStock.pe || ''),
+                            pb: String(selectedStock.pb || ''),
+                            marketCap: String(selectedStock.marketCap || ''),
+                            high: String(selectedStock.high || ''),
+                            low: String(selectedStock.low || ''),
+                            volume: String(selectedStock.volume || ''),
+                            amount: String(selectedStock.amount || ''),
+                            quoteTime: selectedStock.quoteTime || '',
+                            fundNetAmount: String(fundFlow?.netAmount || ''),
+                            fundRatio: String(fundFlow?.ratioAmount || ''),
+                          });
+                          const data = await fetchJson<AIAnalysisResult>(`/api/analyze?${params}`, { headers: { 'X-Gemini-Key': apiKey } });
                           setAiAnalyses(prev => ({ ...prev, [currentSymbol]: data.analysis ? data : { analysis: '分析失败，请重试' } }));
-                        } catch (e) { 
-                          setAiAnalyses(prev => ({ ...prev, [currentSymbol]: { analysis: '网络错误，无法连接到分析引擎' } })); 
+                        } catch {
+                          setAiAnalyses(prev => ({ ...prev, [currentSymbol]: { analysis: '网络错误，无法连接到分析引擎' } }));
                         } finally { setIsAnalyzing(false); }
                       }}
                       className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors disabled:opacity-50"
-                    >{isAnalyzing ? '分析中...' : '开始推演'}</button>
+                    >{isAnalyzing ? '分析中...' : '开始投资分析'}</button>
+                    </div>
                   </div>
                   <p className="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">
-                    {aiAnalyses[selectedStock.symbol]?.analysis || "点击「开始推演」，Gemini 将结合最新消息和资金面为您归因。"}
+                    {aiAnalyses[selectedStock.symbol]?.analysis || "点击「开始投资分析」，系统将结合联网证据、长期历史行情与基本面，生成长期、波段和短线策略。"}
                   </p>
+                  {aiAnalyses[selectedStock.symbol]?.longTermStrategy && (
+                    <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                      {[
+                        ['长期策略 · 1—3年', aiAnalyses[selectedStock.symbol]?.longTermStrategy, 'border-emerald-900/50 bg-emerald-950/20 text-emerald-300'],
+                        ['波段策略 · 1—12周', aiAnalyses[selectedStock.symbol]?.swingStrategy, 'border-amber-900/50 bg-amber-950/20 text-amber-300'],
+                        ['短线策略 · 1—10日', aiAnalyses[selectedStock.symbol]?.shortTermStrategy, 'border-purple-900/50 bg-purple-950/20 text-purple-300'],
+                      ].map(([title, content, style]) => (
+                        <div key={title} className={`rounded border p-3 ${style}`}>
+                          <div className="mb-2 text-xs font-semibold">{title}</div>
+                          <div className="whitespace-pre-wrap text-xs leading-relaxed text-gray-300">{content || '数据不足，暂不形成策略'}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {aiAnalyses[selectedStock.symbol]?.searchStatus && (
+                    <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+                      <span className={`rounded border px-2 py-1 ${
+                        aiAnalyses[selectedStock.symbol]?.searchStatus === 'complete'
+                          ? 'border-emerald-800/60 bg-emerald-950/30 text-emerald-300'
+                          : aiAnalyses[selectedStock.symbol]?.searchStatus === 'partial'
+                            ? 'border-amber-800/60 bg-amber-950/30 text-amber-300'
+                            : 'border-red-800/60 bg-red-950/30 text-red-300'
+                      }`}>
+                        联网检索：{aiAnalyses[selectedStock.symbol]?.searchStatus === 'complete' ? '完成' : aiAnalyses[selectedStock.symbol]?.searchStatus === 'partial' ? '部分完成' : '失败'}
+                      </span>
+                      <span className="rounded border border-gray-700 bg-gray-900/50 px-2 py-1 text-gray-300">
+                        直接催化：{aiAnalyses[selectedStock.symbol]?.directCatalystFound ? '已找到' : '未确认'}
+                      </span>
+                      <span className="rounded border border-gray-700 bg-gray-900/50 px-2 py-1 text-gray-300">
+                        证据置信度：{aiAnalyses[selectedStock.symbol]?.confidence ?? 0}%
+                      </span>
+                      {aiAnalyses[selectedStock.symbol]?.modelUsed && (
+                        <span className="rounded border border-gray-700 bg-gray-900/50 px-2 py-1 text-gray-400">
+                          {aiAnalyses[selectedStock.symbol]?.modelUsed}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {(aiAnalyses[selectedStock.symbol]?.sources?.length ?? 0) > 0 && (
+                    <div className="mt-3 rounded border border-blue-900/30 bg-black/20 p-3">
+                      <div className="mb-2 text-xs font-medium text-blue-300">联网依据</div>
+                      <div className="space-y-2">
+                        {aiAnalyses[selectedStock.symbol]?.sources?.map((source, index) => (
+                          <div key={`${source.url}-${index}`} className="text-xs text-gray-400">
+                            <a href={source.url} target="_blank" rel="noreferrer" className="text-blue-400 hover:text-blue-300 hover:underline">
+                              {index + 1}. {source.title || source.url}
+                            </a>
+                            {(source.sourceType || source.publishedAt) && (
+                              <span className="ml-2 text-gray-600">
+                                {[source.sourceType, source.publishedAt].filter(Boolean).join(' · ')}
+                              </span>
+                            )}
+                            {source.keyFact && <div className="mt-0.5 pl-4 text-gray-500">{source.keyFact}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {aiAnalyses[selectedStock.symbol]?.winRate && (
-                    <div className="mt-3 p-2 bg-blue-950/30 rounded border border-blue-900/30 flex space-x-6 text-xs font-mono">
-                      {aiAnalyses[selectedStock.symbol]?.support && <span className="text-[var(--color-stock-red)]">支撑(防守): {aiAnalyses[selectedStock.symbol]?.support?.toFixed(2)}</span>}
-                      {aiAnalyses[selectedStock.symbol]?.resistance && <span className="text-[var(--color-stock-green)]">压力(进攻): {aiAnalyses[selectedStock.symbol]?.resistance?.toFixed(2)}</span>}
-                      <span className="text-blue-300 font-bold">胜率评级: {aiAnalyses[selectedStock.symbol]?.winRate}</span>
+                    <div className="mt-3 p-3 bg-blue-950/30 rounded border border-blue-900/30 text-xs">
+                      <div className="flex flex-wrap gap-x-6 gap-y-2 font-mono">
+                        {aiAnalyses[selectedStock.symbol]?.support && <span className="text-[var(--color-stock-red)]">主要支撑: {aiAnalyses[selectedStock.symbol]?.support?.toFixed(2)}</span>}
+                        {aiAnalyses[selectedStock.symbol]?.resistance && <span className="text-[var(--color-stock-green)]">主要压力: {aiAnalyses[selectedStock.symbol]?.resistance?.toFixed(2)}</span>}
+                        <span className="text-blue-300 font-bold">胜率评级: {aiAnalyses[selectedStock.symbol]?.winRate}</span>
+                      </div>
+                      {(aiAnalyses[selectedStock.symbol]?.supportBasis || aiAnalyses[selectedStock.symbol]?.resistanceBasis) && (
+                        <div className="mt-2 space-y-1 text-gray-400">
+                          {aiAnalyses[selectedStock.symbol]?.supportBasis && <div>支撑依据：{aiAnalyses[selectedStock.symbol]?.supportBasis}</div>}
+                          {aiAnalyses[selectedStock.symbol]?.resistanceBasis && <div>压力依据：{aiAnalyses[selectedStock.symbol]?.resistanceBasis}</div>}
+                        </div>
+                      )}
+                      <div className="mt-2 text-gray-500">评级说明：{aiAnalyses[selectedStock.symbol]?.ratingBasis || '定性策略评级，不代表历史回测胜率或收益承诺。'}</div>
                     </div>
                   )}
                 </div>
@@ -2012,29 +2400,29 @@ export default function App() {
                 <div className="bg-indigo-900/10 border border-indigo-900/50 rounded-lg p-3 mb-4">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-indigo-400 font-medium">📰 资讯/公告 AI 极速总结 (TL;DR)</span>
-                    <button 
-                      disabled={isAnalyzingNews} 
+                    <button
+                      disabled={isAnalyzingNews}
                       onClick={async () => {
                         if (!apiKey) { setShowSettings(true); return; }
                         setIsAnalyzingNews(true);
                         const currentSymbol = selectedStock.symbol;
-                        setNewsSummaries(prev => ({ 
-                          ...prev, 
-                          [currentSymbol]: { summary: '正在扫描全网资讯与公告，Gemini 分析中...', sentiment: 'NEUTRAL' } 
+                        setNewsSummaries(prev => ({
+                          ...prev,
+                          [currentSymbol]: { summary: '正在扫描全网资讯与公告，Gemini 分析中...', sentiment: 'NEUTRAL' }
                         }));
                         try {
-                          const res = await fetch(`http://localhost:8000/api/news_summary?symbol=${currentSymbol}&name=${encodeURIComponent(selectedStock.name)}`, { 
-                            headers: { 'X-Gemini-Key': apiKey } 
+                          const params = new URLSearchParams({ symbol: currentSymbol, name: selectedStock.name, price: String(selectedStock.price), changePercent: String(selectedStock.changePercent), volume: String(selectedStock.volume), amount: String(selectedStock.amount), quoteTime: selectedStock.quoteTime || '' });
+                          const data = await fetchJson<NewsSummaryResult>(`/api/news_summary?${params}`, {
+                            headers: { 'X-Gemini-Key': apiKey },
                           });
-                          const data = await res.json();
-                          setNewsSummaries(prev => ({ 
-                            ...prev, 
-                            [currentSymbol]: data.summary ? data : { summary: '极速总结失败，请重试。', sentiment: 'NEUTRAL' } 
+                          setNewsSummaries(prev => ({
+                            ...prev,
+                            [currentSymbol]: data.summary ? data : { summary: '极速总结失败，请重试。', sentiment: 'NEUTRAL' }
                           }));
-                        } catch (e) {
-                          setNewsSummaries(prev => ({ 
-                            ...prev, 
-                            [currentSymbol]: { summary: '网络错误，无法连接到分析引擎。', sentiment: 'NEUTRAL' } 
+                        } catch {
+                          setNewsSummaries(prev => ({
+                            ...prev,
+                            [currentSymbol]: { summary: '网络错误，无法连接到分析引擎。', sentiment: 'NEUTRAL' }
                           }));
                         } finally {
                           setIsAnalyzingNews(false);
@@ -2049,7 +2437,7 @@ export default function App() {
                     {newsSummaries[selectedStock.symbol]?.summary || "点击「极速总结」，Gemini 将瞬间为您总结近期重大新闻、利空风险及关键公告。"}
                   </div>
                   {newsSummaries[selectedStock.symbol]?.sentiment && newsSummaries[selectedStock.symbol]?.summary && (
-                    <div className="mt-3 flex items-center space-x-2 text-xs">
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                       <span className="text-gray-500 font-mono">情感诊断:</span>
                       <span className={`px-2 py-0.5 rounded font-bold font-mono ${
                         newsSummaries[selectedStock.symbol].sentiment === 'POSITIVE' ? 'bg-[var(--color-stock-red)]/20 text-[var(--color-stock-red)]' :
@@ -2058,6 +2446,16 @@ export default function App() {
                       }`}>
                         {newsSummaries[selectedStock.symbol].sentiment}
                       </span>
+                      <span className="px-2 py-0.5 rounded bg-gray-800 text-gray-300">事实方向 {newsSummaries[selectedStock.symbol].factSentiment || 'UNCERTAIN'}</span>
+                      <span className="px-2 py-0.5 rounded bg-gray-800 text-gray-300">短期影响 {newsSummaries[selectedStock.symbol].shortTermImpact || 'UNCERTAIN'}</span>
+                      <span className="px-2 py-0.5 rounded bg-gray-800 text-gray-300">计价风险 {newsSummaries[selectedStock.symbol].pricedInRisk || 'UNKNOWN'}</span>
+                      <span className="px-2 py-0.5 rounded bg-gray-800 text-gray-300">证据置信度 {newsSummaries[selectedStock.symbol].confidence ?? 0}%</span>
+                    </div>
+                  )}
+                  {(newsSummaries[selectedStock.symbol]?.sources?.length ?? 0) > 0 && (
+                    <div className="mt-3 border-t border-indigo-900/30 pt-2 space-y-1">
+                      <div className="text-[10px] text-gray-500">核验来源</div>
+                      {newsSummaries[selectedStock.symbol].sources!.slice(0, 5).map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="block text-xs text-indigo-300 hover:underline">{source.title}{source.publishedAt ? ` · ${source.publishedAt}` : ''}</a>)}
                     </div>
                   )}
                 </div>
@@ -2109,6 +2507,20 @@ export default function App() {
             <span>{connected ? 'Live (Tencent API)' : 'Disconnected'}</span>
           </div>
           {connected && <span>Latency: {latency}ms</span>}
+          {stocks.some((stock) => stock.quoteTime) && <span>行情时间: {stocks.find((stock) => stock.quoteTime)?.quoteTime}</span>}
+          {resonanceMeta && <span className={resonanceMeta.status === 'ok' ? 'text-gray-500' : 'text-amber-500'}>共振数据: {resonanceMeta.status === 'ok' ? '完整' : resonanceMeta.status === 'partial' ? '部分样本' : resonanceMeta.status === 'initializing' ? '初始化' : '异常'}</span>}
+          {backendHealth?.sectorMap && (
+            <span
+              className={backendHealth.sectorMap.healthy ? 'text-gray-500' : 'text-amber-500'}
+              title={backendHealth.sectorMap.lastError || undefined}
+            >
+              板块映射: {backendHealth.sectorMap.healthy
+                ? `${backendHealth.sectorMap.stockCount}只${backendHealth.sectorMap.source ? ` · ${backendHealth.sectorMap.source}` : ''}`
+                : backendHealth.sectorMap.status === 'rebuilding'
+                  ? `重建中 (${backendHealth.sectorMap.stockCount}/${backendHealth.sectorMap.minimumHealthyStockCount}+)`
+                  : `不可用 (${backendHealth.sectorMap.stockCount}只缓存)`}
+            </span>
+          )}
         </div>
         <div className="flex items-center space-x-4"><span className="bg-gray-800 px-2 py-0.5 rounded border border-gray-700">Esc 切换 Boss Key</span></div>
       </footer>
@@ -2119,8 +2531,25 @@ export default function App() {
             <h3 className="text-lg font-bold mb-4">系统设置</h3>
             <div className="mb-4">
               <label className="block text-xs text-gray-400 mb-2">Gemini API Key</label>
-              <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="AI 异动分析需要配置 API Key" className="w-full bg-black border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-              <p className="text-xs text-gray-500 mt-2">API Key 仅保存在您的本地浏览器中，不会上传到我们的服务器。</p>
+              <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="AI 投资分析需要配置 API Key" className="w-full bg-black border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
+              <p className="text-xs text-gray-500 mt-2">API Key 仅保存在本地浏览器，请求时会发送给本机后端调用 Gemini，不会持久化保存。</p>
+              <div className="mt-3 rounded border border-gray-800 bg-black/30 p-3">
+                <div className="text-xs text-gray-400 mb-2">模型调用优先级</div>
+                <ol className="space-y-1 text-xs text-gray-300 list-decimal list-inside">
+                  <li>Antigravity</li>
+                  <li>Gemini 3.5 Flash</li>
+                  <li>Gemini 3.1 Flash Lite</li>
+                  <li>Gemini 2.5 Flash</li>
+                </ol>
+              </div>
+              <div className="mt-3 rounded border border-gray-800 bg-black/30 p-3">
+                <div className="text-xs text-gray-400 mb-2">本地研究数据迁移</div>
+                <div className="flex gap-2">
+                  <button onClick={exportResearchData} className="flex-1 px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded text-xs">导出备份</button>
+                  <label className="flex-1 px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded text-xs text-center cursor-pointer">导入备份<input type="file" accept="application/json" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) importResearchData(file); e.target.value = ''; }} /></label>
+                </div>
+                <p className="text-[10px] text-gray-600 mt-2">包含自选分组、研究卡片、策略记录和图表偏好；不包含 API Key。</p>
+              </div>
             </div>
             <div className="flex justify-end space-x-3"><button onClick={() => setShowSettings(false)} className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded text-sm transition-colors">关闭</button></div>
           </div>

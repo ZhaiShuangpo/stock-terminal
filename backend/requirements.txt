@@ -1,0 +1,6 @@
+akshare==1.18.55
+fastapi==0.135.3
+google-genai==2.11.0
+httpx==0.28.1
+pandas==3.0.2
+uvicorn==0.44.0

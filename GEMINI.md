@@ -58,7 +58,7 @@ To cleanly terminate the running backend and frontend processes:
     *   The backend utilizes modern Python features, heavily relying on asynchronous programming (`asyncio`, `httpx`, `websockets`) for performance.
 *   **Real-time Data Flow:** WebSockets (`/ws/market`) are the primary mechanism for streaming live market data. REST endpoints are reserved for discrete actions (e.g., search, historical data fetching, AI analysis).
 *   **AI Integration Principles:** 
-    *   The backend leverages the Gemini API (primarily `gemini-2.5-flash` with a robust fallback loop including `gemini-3-flash`, `gemini-3.1-flash-lite`, etc., for high availability).
+    *   The backend uses this fixed AI fallback order: `antigravity-preview-05-2026`, `gemini-3.5-flash`, `gemini-3.1-flash-lite`, and `gemini-2.5-flash`.
     *   AI prompts must utilize `google_search` grounding and be injected with real-time market data (price, change percent) to prevent model hallucinations during stock analysis and market reviews.
 *   **Privacy & Local Storage:** Sensitive user configurations, including the Gemini API Key and customized watchlist groups, must be persisted locally in the browser's `localStorage`. They should never be transmitted to or stored on a central server.
 *   **UI/UX Guidelines:** Adhere to the established dark theme and responsive grid layout. Any new UI components must respect and integrate with the "Boss Mode" functionality (toggled via the `Esc` key), ensuring sensitive financial data can be instantly obfuscated.

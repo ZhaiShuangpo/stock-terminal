@@ -3,6 +3,7 @@
 
 # 忽略日志文件
 *.log
+*.pid
 
 # 忽略临时数据文件
 body_dump.html

@@ -1,11 +1,25 @@
-export function calculateMA(data: any[], period: number) {
-  const result: any[] = [];
+import type { LinePoint } from '../types/domain';
+import type { Time } from 'lightweight-charts';
+
+interface IndicatorInput {
+  time: Time;
+  value?: number;
+  close?: number;
+}
+
+function pointValue(point: IndicatorInput, key: 'close' | 'value' = 'close'): number {
+  return point[key] ?? point.value ?? point.close ?? 0;
+}
+
+export function calculateMA(data: IndicatorInput[], period: number): LinePoint[] {
+  if (period <= 0) return [];
+  const result: LinePoint[] = [];
   let sum = 0;
   for (let i = 0; i < data.length; i++) {
-    const val = data[i].value ?? data[i].close;
+    const val = pointValue(data[i]);
     sum += val;
     if (i >= period) {
-      sum -= data[i - period].value ?? data[i - period].close;
+      sum -= pointValue(data[i - period]);
     }
     if (i >= period - 1) {
       result.push({ time: data[i].time, value: sum / period });
@@ -14,12 +28,13 @@ export function calculateMA(data: any[], period: number) {
   return result;
 }
 
-export function calculateEMA(data: any[], period: number, key: string = 'close') {
-  const result: any[] = [];
+export function calculateEMA(data: IndicatorInput[], period: number, key: 'close' | 'value' = 'close'): LinePoint[] {
+  if (data.length === 0 || period <= 0) return [];
+  const result: LinePoint[] = [];
   const k = 2 / (period + 1);
-  let ema = data[0][key] ?? data[0].value;
+  let ema = pointValue(data[0], key);
   for (let i = 0; i < data.length; i++) {
-    const val = data[i][key] ?? data[i].value;
+    const val = pointValue(data[i], key);
     if (i === 0) {
       result.push({ time: data[i].time, value: val });
     } else {
@@ -30,18 +45,19 @@ export function calculateEMA(data: any[], period: number, key: string = 'close')
   return result;
 }
 
-export function calculateMACD(data: any[], shortPeriod = 12, longPeriod = 26, signalPeriod = 9) {
+export function calculateMACD(data: IndicatorInput[], shortPeriod = 12, longPeriod = 26, signalPeriod = 9) {
+  if (data.length === 0) return { dif: [], dea: [], histogram: [] };
   const emaShort = calculateEMA(data, shortPeriod);
   const emaLong = calculateEMA(data, longPeriod);
   
-  const difData: any[] = [];
+  const difData: LinePoint[] = [];
   for (let i = 0; i < data.length; i++) {
     difData.push({ time: data[i].time, value: emaShort[i].value - emaLong[i].value });
   }
   
   const deaData = calculateEMA(difData, signalPeriod, 'value');
   
-  const macdHist: any[] = [];
+  const macdHist: LinePoint[] = [];
   for (let i = 0; i < data.length; i++) {
     const dif = difData[i].value;
     const dea = deaData[i].value;

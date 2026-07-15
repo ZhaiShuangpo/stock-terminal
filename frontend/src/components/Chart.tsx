@@ -1,20 +1,24 @@
 import { useEffect, useRef } from 'react';
 import { createChart, ColorType, AreaSeries, LineSeries, CandlestickSeries, HistogramSeries, createSeriesMarkers } from 'lightweight-charts';
-import type { ISeriesApi } from 'lightweight-charts';
+import type {
+  AreaData, BusinessDay, CandlestickData, IChartApi, IPriceLine,
+  ISeriesApi, ISeriesMarkersPluginApi, SeriesMarker, Time,
+} from 'lightweight-charts';
+import type { ChartMarker, HistoryPoint, IntradayPoint, LinePoint } from '../types/domain';
 
 interface ChartProps {
-  data: any[];
-  vwapData?: any[];
-  markers?: any[];
+  data: Array<IntradayPoint | HistoryPoint>;
+  vwapData?: LinePoint[];
+  markers?: ChartMarker[];
   prevClose?: number;
   type?: 'area' | 'candlestick';
-  volumeData?: any[];
-  ma5Data?: any[];
-  ma10Data?: any[];
-  ma20Data?: any[];
-  ma60Data?: any[];
-  ma120Data?: any[];
-  macdData?: { dif: any[]; dea: any[]; histogram: any[] };
+  volumeData?: LinePoint[];
+  ma5Data?: LinePoint[];
+  ma10Data?: LinePoint[];
+  ma20Data?: LinePoint[];
+  ma60Data?: LinePoint[];
+  ma120Data?: LinePoint[];
+  macdData?: { dif: LinePoint[]; dea: LinePoint[]; histogram: LinePoint[] };
   supportPrice?: number;
   resistancePrice?: number;
   visibleIndicators?: {
@@ -61,7 +65,7 @@ export const Chart = ({
   } = {},
 }: ChartProps) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<any>(null);
+  const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Area"> | ISeriesApi<"Candlestick"> | null>(null);
   const vwapSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
@@ -73,20 +77,24 @@ export const Chart = ({
   const macdDifRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdDeaRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const markersPrimitiveRef = useRef<any>(null);
-  const supportLineRef = useRef<any>(null);
-  const resistanceLineRef = useRef<any>(null);
+  const markersPrimitiveRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const supportLineRef = useRef<IPriceLine | null>(null);
+  const resistanceLineRef = useRef<IPriceLine | null>(null);
   const vpContainerRef = useRef<HTMLDivElement | null>(null);
   const updateVpRef = useRef<() => void>(() => {});
   const dataRef = useRef(data);
   const volumeDataRef = useRef(volumeData);
+  const vwapDataRef = useRef(vwapData);
+  const markersRef = useRef(markers);
 
   const visibleIndicatorsRef = useRef(visibleIndicators);
 
   useEffect(() => {
     dataRef.current = data;
     volumeDataRef.current = volumeData;
-  }, [data, volumeData]);
+    vwapDataRef.current = vwapData;
+    markersRef.current = markers;
+  }, [data, volumeData, vwapData, markers]);
 
   useEffect(() => {
     visibleIndicatorsRef.current = visibleIndicators;
@@ -108,7 +116,7 @@ export const Chart = ({
         timeVisible: type === 'area',
         secondsVisible: false,
         borderColor: 'rgba(43, 43, 67, 0.5)',
-        tickMarkFormatter: (time: any) => {
+        tickMarkFormatter: (time: Time) => {
           if (typeof time === 'string') return time;
           if (typeof time === 'object' && time !== null && 'year' in time) {
             return `${time.year}-${String(time.month).padStart(2, '0')}-${String(time.day).padStart(2, '0')}`;
@@ -121,7 +129,7 @@ export const Chart = ({
         },
       },
       localization: {
-        timeFormatter: (time: any) => {
+        timeFormatter: (time: Time) => {
           if (typeof time === 'string') return time;
           if (typeof time === 'object' && time !== null && 'year' in time) {
             return `${time.year}-${String(time.month).padStart(2, '0')}-${String(time.day).padStart(2, '0')}`;
@@ -200,15 +208,22 @@ export const Chart = ({
       vwapSeriesRef.current = vwapSeries;
     }
 
-    if (data && data.length > 0) {
-      mainSeries.setData(data);
-      if (markers && markers.length > 0) {
-        markersPrimitiveRef.current = createSeriesMarkers(mainSeries as any, markers);
+    const initialData = dataRef.current;
+    const initialMarkers = markersRef.current;
+    const initialVwapData = vwapDataRef.current;
+    if (initialData.length > 0) {
+      if (type === 'area') {
+        (mainSeries as ISeriesApi<'Area'>).setData(initialData as AreaData<Time>[]);
+      } else {
+        (mainSeries as ISeriesApi<'Candlestick'>).setData(initialData as CandlestickData<Time>[]);
+      }
+      if (initialMarkers && initialMarkers.length > 0) {
+        markersPrimitiveRef.current = createSeriesMarkers(mainSeries, initialMarkers as unknown as SeriesMarker<Time>[]);
       }
       chart.timeScale().fitContent();
     }
-    if (vwapSeries && vwapData && vwapData.length > 0) {
-      vwapSeries.setData(vwapData);
+    if (vwapSeries && initialVwapData && initialVwapData.length > 0) {
+      vwapSeries.setData(initialVwapData);
     }
 
     const handleResize = () => {
@@ -269,6 +284,7 @@ export const Chart = ({
       let maxP = -Infinity;
       for (let i = startIndex; i <= endIndex; i++) {
          const d = dataRef.current[i];
+         if (!('low' in d)) continue;
          if (d.low < minP) minP = d.low;
          if (d.high > maxP) maxP = d.high;
       }
@@ -282,6 +298,7 @@ export const Chart = ({
       const bins = new Array(BINS).fill(0);
       for (let i = startIndex; i <= endIndex; i++) {
         const d = dataRef.current[i];
+        if (!('low' in d)) continue;
         const v = volumeDataRef.current[i]?.value || 0;
         const typPrice = (d.high + d.low + d.close) / 3;
         let binIdx = Math.floor((typPrice - minP) / binSize);
@@ -332,7 +349,7 @@ export const Chart = ({
     };
 
     let lastVpTime = 0;
-    let vpTimeout: any = null;
+    let vpTimeout: ReturnType<typeof setTimeout> | null = null;
     const updateVolumeProfileThrottled = () => {
       const now = Date.now();
       const throttleMs = 100;
@@ -370,7 +387,7 @@ export const Chart = ({
         tooltip.style.display = 'none';
       } else {
         tooltip.style.display = 'block';
-        const dataPoint = param.seriesData.get(mainSeries) as any;
+        const dataPoint = param.seriesData.get(mainSeries) as AreaData<Time> | CandlestickData<Time> | undefined;
         if (dataPoint) {
           let timeStr = String(param.time);
           if (typeof param.time === 'number') {
@@ -381,13 +398,13 @@ export const Chart = ({
                timeStr = `${timeObj.getUTCFullYear()}-${(timeObj.getUTCMonth()+1).toString().padStart(2, '0')}-${timeObj.getUTCDate().toString().padStart(2, '0')}`;
             }
           } else if (typeof param.time === 'object' && param.time !== null && 'year' in param.time) {
-            const bt = param.time as any;
+            const bt = param.time as BusinessDay;
             timeStr = `${bt.year}-${String(bt.month).padStart(2, '0')}-${String(bt.day).padStart(2, '0')}`;
           }
 
           let content = '';
           if (type === 'area') {
-            const price = dataPoint.value;
+            const price = 'value' in dataPoint ? dataPoint.value : dataPoint.close;
             let changeStr = '';
             if (prevClose) {
               const change = price - prevClose;
@@ -403,6 +420,7 @@ export const Chart = ({
             `;
           } else {
             // Candlestick tooltip
+            if (!('open' in dataPoint)) return;
             const { open, high, low, close } = dataPoint;
             const change = close - open;
             const changePercent = (change / open) * 100;
@@ -459,12 +477,16 @@ export const Chart = ({
   // Update data when data prop changes without recreating chart
   useEffect(() => {
     if (seriesRef.current && data && data.length > 0) {
-      seriesRef.current.setData(data);
+      if (type === 'area') {
+        (seriesRef.current as ISeriesApi<'Area'>).setData(data as AreaData<Time>[]);
+      } else {
+        (seriesRef.current as ISeriesApi<'Candlestick'>).setData(data as CandlestickData<Time>[]);
+      }
       if (markers && type === 'area') {
         if (!markersPrimitiveRef.current) {
-          markersPrimitiveRef.current = createSeriesMarkers(seriesRef.current as any, markers);
+          markersPrimitiveRef.current = createSeriesMarkers(seriesRef.current, markers as unknown as SeriesMarker<Time>[]);
         } else {
-          markersPrimitiveRef.current.setMarkers(markers);
+          markersPrimitiveRef.current.setMarkers(markers as unknown as SeriesMarker<Time>[]);
         }
       }
 
@@ -523,7 +545,7 @@ export const Chart = ({
       }
       setTimeout(() => updateVpRef.current(), 50);
     }
-  }, [data, vwapData, markers, type, ma5Data, ma10Data, ma20Data, volumeData, macdData, supportPrice, resistancePrice]);
+  }, [data, vwapData, markers, type, ma5Data, ma10Data, ma20Data, ma60Data, ma120Data, volumeData, macdData, supportPrice, resistancePrice]);
 
   useEffect(() => {
     if (type === 'candlestick') {
@@ -548,4 +570,3 @@ export const Chart = ({
 
   return <div ref={chartContainerRef} className="w-full h-full relative" />;
 };
-

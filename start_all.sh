@@ -1,24 +1,61 @@
 #!/bin/bash
 
 # 大A盯盘终端 - 一键启动脚本
+set -euo pipefail
 
-# 1. 进入目录并清理旧进程
-echo "正在清理旧进程..."
-lsof -t -i:8000 | xargs kill -9 2>/dev/null
-lsof -t -i:5173 | xargs kill -9 2>/dev/null
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# 2. 启动后端 (Python FastAPI)
+ensure_port_available() {
+  local port="$1"
+  if lsof -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "端口 $port 已被其他进程占用。请先确认该服务后再停止，脚本不会强制终止它。"
+    exit 1
+  fi
+}
+
+ensure_port_available 8000
+ensure_port_available 5173
+
+wait_for_url() {
+  local name="$1"
+  local url="$2"
+  for _ in {1..40}; do
+    if curl --fail --silent --max-time 1 "$url" >/dev/null 2>&1; then
+      echo "$name 已就绪。"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "$name 启动超时，请检查日志。"
+  return 1
+}
+
+cleanup_failed_start() {
+  "$ROOT_DIR/stop_all.sh" >/dev/null 2>&1 || true
+}
+
+trap cleanup_failed_start ERR
+
 echo "正在启动后端行情引擎 (Port 8000)..."
-cd backend
-source venv/bin/activate
-nohup python -u main.py > backend.log 2>&1 &
-cd ..
+(
+  cd "$ROOT_DIR/backend"
+  nohup venv/bin/python -u main.py > backend.log 2>&1 &
+  echo $! > "$ROOT_DIR/backend.pid"
+)
 
-# 3. 启动前端 (React Vite)
+wait_for_url "后端行情引擎" "http://127.0.0.1:8000/api/health"
+
 echo "正在启动前端交互界面 (Port 5173)..."
-cd frontend
-nohup npm run dev > frontend.log 2>&1 &
-cd ..
+(
+  cd "$ROOT_DIR/frontend"
+  # Start Vite directly so the PID file identifies the actual listening
+  # process instead of an npm wrapper that can leave an orphan child behind.
+  nohup node node_modules/vite/bin/vite.js --host 0.0.0.0 > frontend.log 2>&1 &
+  echo $! > "$ROOT_DIR/frontend.pid"
+)
+
+wait_for_url "前端交互界面" "http://127.0.0.1:5173"
+trap - ERR
 
 echo "---------------------------------------"
 echo "✅ 服务启动成功！"
